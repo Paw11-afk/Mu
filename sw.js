@@ -1,8 +1,8 @@
-// HFAM service worker: receives the PC's encrypted pushes, shows them as iOS notifications,
+// Mu Trading Technologies service worker: receives the PC's encrypted pushes, shows them as iOS notifications,
 // keeps the history on the phone, and caches the app so it opens offline.
 importScripts("db.js");
 
-const CACHE = "hfam-v2";
+const CACHE = "mu-v3";
 const SHELL = ["./", "index.html", "db.js", "app-config.js", "manifest.webmanifest",
                "icons/icon-192.png", "icons/apple-touch-icon.png"];
 
@@ -40,7 +40,7 @@ const PREFIX = { CRITICAL: "CRITICAL · ", WARNING: "Warning · ", RESOLVED: "Re
 // One path for every alert: store it, badge it, show it, tell open windows.
 async function handleAlert(m) {
   const lvl = m.lvl || "INFO";
-  const title = (PREFIX[lvl] || "") + (m.t || "HFAM alert");
+  const title = (PREFIX[lvl] || "") + (m.t || "Mu alert");
   const short = String(m.b || "").split("\n").filter(Boolean).slice(0, 4).join("\n").slice(0, 240);
   // the dashboard key arrives once, inside this end-to-end encrypted push; it never leaves the phone
   if (m.sk) { try { await HFAMDB.kvSet("statusKey", m.sk); } catch (_) {} }
@@ -63,14 +63,14 @@ async function handleAlert(m) {
 
 self.addEventListener("push", (event) => {
   let m = {};
-  try { m = event.data ? event.data.json() : {}; } catch (_) { m = { t: "HFAM", b: event.data ? event.data.text() : "" }; }
+  try { m = event.data ? event.data.json() : {}; } catch (_) { m = { t: "Mu", b: event.data ? event.data.text() : "" }; }
   event.waitUntil(handleAlert(m));
 });
 
 // The app's "Test notification" button runs the exact same path as a real push.
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "local-test") {
-    event.waitUntil(handleAlert({ lvl: "INFO", t: "HFAM test (on this phone)", k: "local-test",
+    event.waitUntil(handleAlert({ lvl: "INFO", t: "Mu test (on this phone)", k: "local-test",
                                   b: "Notifications and history work on this device.", ts: Date.now() / 1000 }));
   }
 });

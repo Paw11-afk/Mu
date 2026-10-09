@@ -1,7 +1,7 @@
 {
-  "name": "HFAM alerts",
-  "short_name": "HFAM",
-  "description": "Alerts and daily summary from the HFAM trading system",
+  "name": "Mu Trading Technologies",
+  "short_name": "Mu",
+  "description": "Alerts, dashboard and daily summary from Mu Trading Technologies",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

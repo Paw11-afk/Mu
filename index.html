@@ -323,7 +323,8 @@ function renderBot(b) {
   if (b.allin === undefined) return h + '<p>No position.</p></section>';
   const det = b.tilt_detail || {}, up = Object.values(det).filter((v) => v).length, n = Object.keys(det).length;
   const fp = b.funding_proj ? " (" + Math.round(b.funding_real / b.funding_proj * 100) + "% of projected)" : "";
-  h += '<div class="big ' + cls(b.allin) + '">' + usd(b.allin) + '</div><p class="sub" style="margin:0">all-in since open' +
+  h += '<div class="big ' + cls(b.allin) + '">' + usd(b.allin) + '</div><p class="sub" style="margin:0">' +
+       (b.dry_run ? "virtual P&amp;L (dry run: nothing real is held, est. fees included)" : "all-in since open") +
        (b.entered_ts ? " · " + ago(b.entered_ts).replace(" ago", "") : "") + '</p>' + sparkSvg(b.pnl_series);
   const rows = [
     ["Spot leg", '<span class="' + cls(b.spot_pnl) + '">' + usd(b.spot_pnl) + '</span>'],

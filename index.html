@@ -57,6 +57,22 @@ footer{margin-top:22px;display:flex;gap:10px;flex-wrap:wrap}footer button{flex:1
 .toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 20px);transform:translateX(-50%);background:var(--ink);
 color:var(--bg);padding:10px 16px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.show{opacity:1}
+.tabs{display:flex;gap:6px;background:var(--chip);padding:4px;border-radius:12px;margin:4px 0 14px}
+.tabs button{flex:1;min-height:38px;border-radius:9px;background:none;color:var(--muted);font-size:15px}
+.tabs button[aria-selected="true"]{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.15)}
+.dashbar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:0 0 10px}
+.dashbar button{min-height:34px;padding:0 14px;font-size:13px;border-radius:999px}
+.bot .head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.bot .head b{font-size:18px}.pills{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.big{font-size:30px;font-weight:700;margin:6px 0 0;font-variant-numeric:tabular-nums}
+.big.pos,.pos{color:var(--good)}.big.neg,.neg{color:var(--bad)}
+.spark{display:block;width:100%;height:46px;margin:6px 0 2px}
+.kvr{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line);font-size:14px}
+.kvr:last-child{border-bottom:0}.kvr span:first-child{color:var(--muted)}.kvr span:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.chips{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}.chips span{font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px;background:var(--chip)}
+.tbl{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
+.tbl th{font-size:11px;color:var(--muted);font-weight:600;text-align:right;padding:4px 4px 6px}.tbl td{padding:6px 4px;border-top:1px solid var(--line);text-align:right}
+.tbl th:first-child,.tbl td:first-child{text-align:left}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -106,6 +122,18 @@ color:var(--bg);padding:10px 16px;border-radius:999px;font-size:14px;opacity:0;t
     <div class="row"><button id="btnRepair" class="link" type="button">Make a new code</button></div>
   </section>
 
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button id="tabDash" role="tab" aria-selected="true">Dashboard</button>
+    <button id="tabAlerts" role="tab" aria-selected="false">Alerts</button>
+  </nav>
+
+  <div id="viewDash">
+    <div class="dashbar"><span id="dashWhen" class="sub">loading…</span><button id="btnRefresh" class="secondary">Refresh</button></div>
+    <section id="dashMsg" class="card" hidden></section>
+    <div id="dash"></div>
+  </div>
+
+  <div id="viewAlerts" hidden>
   <section id="latestWrap" hidden>
     <h2>Latest summary</h2>
     <div class="card"><pre id="latest" style="padding:0"></pre><p id="latestWhen" class="small" style="text-align:left"></p></div>
@@ -125,7 +153,9 @@ color:var(--bg);padding:10px 16px;border-radius:999px;font-size:14px;opacity:0;t
     <button id="btnTest" class="secondary">Test notification</button>
     <button id="btnClear" class="secondary">Clear history</button>
   </footer>
-  <p class="small">Alerts come from the HFAM watchdog on your PC. If the PC is off, nothing can be sent.</p>
+  </div>
+  <p class="small">Alerts and the dashboard come from the HFAM watchdog on your PC (dashboard every 15 min).
+     If the PC is off, nothing updates. The dashboard is encrypted; only this phone holds its key.</p>
 </div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
@@ -232,6 +262,125 @@ document.querySelectorAll(".filters button").forEach((b) => b.addEventListener("
   renderAlerts();
 }));
 
+// ---------------------------------------------------------------- tabs
+function showTab(t) {
+  const dash = t !== "alerts";
+  show("#viewDash", dash); show("#viewAlerts", !dash);
+  $("#tabDash").setAttribute("aria-selected", String(dash)); $("#tabAlerts").setAttribute("aria-selected", String(!dash));
+  localStorageSet("tab", dash ? "dash" : "alerts");
+  if (dash) loadDash(); else renderAlerts();
+}
+$("#tabDash").addEventListener("click", () => showTab("dash"));
+$("#tabAlerts").addEventListener("click", () => showTab("alerts"));
+
+// ---------------------------------------------------------------- dashboard (encrypted status from GitHub)
+// The PC publishes status.json to the app repo's "status" branch every 15 min, AES-256-GCM encrypted.
+// The key arrived once inside an end-to-end encrypted push and is kept only in this phone's storage.
+const statusUrl = () => {
+  const q = new URLSearchParams(location.search).get("status");          // local testing only
+  if (q) return q;
+  const owner = location.hostname.split(".")[0];
+  const repo = location.pathname.split("/").filter(Boolean)[0] || "";
+  return "https://raw.githubusercontent.com/" + owner + "/" + repo + "/status/status.json";
+};
+const b64ToBytes = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+const usd = (v, dp = 2) => v == null ? "–" : (v < 0 ? "−$" : (v > 0 ? "+$" : "$")) + Math.abs(v).toFixed(dp);
+const usd0 = (v) => v == null ? "–" : "$" + Number(v).toFixed(0);
+const cls = (v) => v == null ? "" : (v >= 0 ? "pos" : "neg");
+const pct = (v, dp = 1) => v == null ? "–" : Number(v).toFixed(dp) + "%";
+
+function sparkSvg(pts) {
+  if (!pts || pts.length < 2) return "";
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), lo = Math.min(0, ...ys), hi = Math.max(0, ...ys);
+  const X = (x) => (x1 > x0 ? (x - x0) / (x1 - x0) : 0) * 300, Y = (y) => 44 - (hi > lo ? (y - lo) / (hi - lo) : 0.5) * 40 - 2;
+  const d = pts.map((p, i) => (i ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1)).join(" ");
+  const last = ys[ys.length - 1];
+  return '<svg class="spark" viewBox="0 0 300 46" preserveAspectRatio="none" aria-label="All-in P&L, last 72 hours">' +
+    '<line x1="0" x2="300" y1="' + Y(0).toFixed(1) + '" y2="' + Y(0).toFixed(1) + '" stroke="var(--line)" stroke-dasharray="3 3"/>' +
+    '<path d="' + d + '" fill="none" stroke="' + (last >= 0 ? "var(--good)" : "var(--bad)") + '" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>';
+}
+
+function renderBot(b) {
+  const pills = '<span class="pill ' + (b.dry_run ? "off" : "on") + '">' + (b.dry_run ? "DRY RUN" : "LIVE") + '</span>' +
+    '<span class="pill ' + (b.running ? "on" : "bad") + '">' + (b.running ? esc(b.state) : "NOT RUNNING") + '</span>';
+  let h = '<section class="card bot"><div class="head"><b>' + esc(b.asset) + ' carry</b><span class="pills">' + pills + '</span></div>';
+  if (b.allin === undefined) return h + '<p>No position.</p></section>';
+  const det = b.tilt_detail || {}, up = Object.values(det).filter((v) => v).length, n = Object.keys(det).length;
+  const fp = b.funding_proj ? " (" + Math.round(b.funding_real / b.funding_proj * 100) + "% of projected)" : "";
+  h += '<div class="big ' + cls(b.allin) + '">' + usd(b.allin) + '</div><p class="sub" style="margin:0">all-in since open' +
+       (b.entered_ts ? " · " + ago(b.entered_ts).replace(" ago", "") : "") + '</p>' + sparkSvg(b.pnl_series);
+  const rows = [
+    ["Spot leg", '<span class="' + cls(b.spot_pnl) + '">' + usd(b.spot_pnl) + '</span>'],
+    ["Futures leg", '<span class="' + cls(b.perp_pnl) + '">' + usd(b.perp_pnl) + '</span>'],
+    ["Holding", (b.held != null ? b.held.toFixed(2) : "–") + " " + esc(b.asset) + " @ " + (b.px != null ? b.px.toFixed(4) : "–")],
+    ["Short", Math.abs(b.perp_ct || 0) + " ct @ " + (b.mark != null ? b.mark.toFixed(4) : "–")],
+    ["Net exposure", (b.net_q != null ? (b.net_q >= 0 ? "+" : "") + b.net_q.toFixed(2) : "–") + " " + esc(b.asset)],
+    ["Funding received", usd(b.funding_real, 4) + fp],
+    ["Funding rate", pct(b.apr_now, 2) + " a year"],
+    ["Liquidation", pct(b.liq_dist) + " away"],
+    ["Hedge error", pct(b.hedge_err, 2)],
+  ];
+  if (b.tilt) rows.push(["TILT", up + "/" + n + " signals up → hedge " + Math.round((b.tilt_h || 1) * 100) + "% (target " +
+                         (b.tilt_target_ct ?? "?") + " ct)"]);
+  h += rows.map((r) => '<div class="kvr"><span>' + r[0] + '</span><span>' + r[1] + '</span></div>').join("");
+  if (n) h += '<div class="chips">' + Object.entries(det).map(([k, v]) => '<span class="' + (v ? "pos" : "neg") + '">' +
+              esc(k) + " " + (v ? "up" : "down") + '</span>').join("") + '</div>';
+  return h + '</section>';
+}
+
+function renderDash(st, ts) {
+  let h = (st.bots || []).map(renderBot).join("");
+  const acc = st.account || {};
+  if (acc.total_eq != null) h += '<section class="card"><div class="kvr"><span>OKX account equity</span><span>' + usd0(acc.total_eq) +
+    '</span></div><div class="kvr"><span>USDC</span><span>' + usd0(acc.usdc_eq) + '</span></div></section>';
+  const al = st.allocation;
+  if (al && al.assets) {
+    h += '<h2>Allocation · ' + esc(al.mode) + '</h2><section class="card"><table class="tbl"><tr><th>Coin</th><th>Plan</th><th>Capital</th><th>Hedged</th><th>%/yr</th></tr>' +
+      Object.entries(al.assets).sort((a, b) => a[1].rank - b[1].rank).map(([a, t]) => '<tr><td><b>' + esc(a) + '</b></td><td>' + esc(t.status) +
+      '</td><td>' + usd0(t.capital_usd) + '</td><td>' + usd0(t.spot_notional_usd) + '</td><td>' + pct(t.net_on_capital) + '</td></tr>').join("") +
+      (al.dropped || []).map((d) => '<tr><td><b>' + esc(d.asset) + '</b></td><td class="neg">drop</td><td colspan="3">' + esc(d.why) + '</td></tr>').join("") +
+      '</table><p class="sub" style="margin:8px 0 0">Expected ~' + usd0(al.expected_carry_usd_yr) + '/yr (' + pct(al.expected_carry_pct) + ' on ' +
+      usd0(al.capital_usd) + ')' + ((al.notes || []).length ? ". " + esc(al.notes.join(". ")) : "") + '</p></section>';
+  }
+  const sc = st.screen;
+  if (sc && sc.top) h += '<h2>Carry screen · ' + sc.eligible + ' of ' + sc.universe + ' pass</h2><section class="card"><table class="tbl"><tr><th>#</th><th>Coin</th><th>On capital</th><th>Funding</th></tr>' +
+    sc.top.slice(0, 6).map((r) => '<tr><td>' + r.rank + '</td><td><b>' + esc(r.asset) + '</b></td><td>' + pct(r.net_on_capital) + '</td><td>' + pct(r.fund_cons_ann) + '</td></tr>').join("") + '</table></section>';
+  const act = Object.entries((st.watchdog || {}).active || {});
+  h += '<h2>Watchdog</h2><section class="card">' + (act.length ? act.map(([k, l]) => '<div class="kvr"><span>' + esc(k) + '</span><span class="' +
+       (l === "CRITICAL" ? "neg" : "") + '">' + esc(l) + '</span></div>').join("") : '<p class="pos" style="margin:0">All clear — nothing active.</p>') + '</section>';
+  $("#dash").innerHTML = h;
+  $("#dashWhen").textContent = "Updated " + ago(ts) + " · " + new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function dashMsg(html) { $("#dashMsg").innerHTML = html; show("#dashMsg", !!html); }
+
+async function loadDash() {
+  let k = null;
+  try { k = await HFAMDB.kvGet("statusKey"); } catch (_) {}
+  if (!k) {
+    $("#dashWhen").textContent = "Not unlocked yet";
+    dashMsg('<h3>Dashboard key not on this phone yet</h3><p>On the PC run <b>python hfam_publish.py --send-key</b>. ' +
+            'A "Dashboard unlocked" notification arrives, and the dashboard appears here.</p>');
+    return;
+  }
+  try {
+    $("#dashWhen").textContent = "Loading…";
+    const r = await fetch(statusUrl() + (statusUrl().includes("?") ? "&" : "?") + "t=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) throw new Error("status file " + r.status);
+    const env = await r.json();
+    const key = await crypto.subtle.importKey("raw", b64uToBytes(k), "AES-GCM", false, ["decrypt"]);
+    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64ToBytes(env.iv) }, key, b64ToBytes(env.ct));
+    dashMsg("");
+    renderDash(JSON.parse(new TextDecoder().decode(pt)), env.ts);
+  } catch (e) {
+    $("#dashWhen").textContent = "Could not load";
+    dashMsg('<h3>Dashboard unavailable</h3><p>' + esc(String(e.message || e)) + '. The PC publishes every 15 minutes; ' +
+            'if it was just set up, try again shortly.</p>');
+  }
+}
+$("#btnRefresh").addEventListener("click", loadDash);
+
 (async () => {
   if ("serviceWorker" in navigator) {
     try { reg = await navigator.serviceWorker.register("sw.js", { scope: "./" }); await navigator.serviceWorker.ready; }
@@ -239,6 +388,7 @@ document.querySelectorAll(".filters button").forEach((b) => b.addEventListener("
     navigator.serviceWorker.addEventListener("message", (e) => {
       if (e.data && e.data.type === "alert") {
         renderAlerts();
+        if (!$("#viewDash").hidden) loadDash();          // e.g. the dashboard key just arrived
         HFAMDB.all().then((rows) => {                       // the first push after pairing proves the pairing
           if (rows.some((r) => r.k === "paired") && reg) reg.pushManager.getSubscription().then((s) => {
             if (s) { localStorageSet("paired", s.endpoint); refreshSetup(); }
@@ -249,12 +399,16 @@ document.querySelectorAll(".filters button").forEach((b) => b.addEventListener("
   }
   await refreshSetup();
   await renderAlerts();
+  showTab(localStorageGet("tab") === "alerts" ? "alerts" : "dash");
   const rows = await HFAMDB.all().catch(() => []);
   if (rows.some((r) => r.k === "paired") && reg) {
     const s = await reg.pushManager.getSubscription();
     if (s) { localStorageSet("paired", s.endpoint); refreshSetup(); }
   }
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) renderAlerts(); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    if ($("#viewDash").hidden) renderAlerts(); else loadDash();
+  });
 })();
 </script>
 </body>

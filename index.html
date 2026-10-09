@@ -276,13 +276,28 @@ $("#tabAlerts").addEventListener("click", () => showTab("alerts"));
 // ---------------------------------------------------------------- dashboard (encrypted status from GitHub)
 // The PC publishes status.json to the app repo's "status" branch every 15 min, AES-256-GCM encrypted.
 // The key arrived once inside an end-to-end encrypted push and is kept only in this phone's storage.
-const statusUrl = () => {
+// GitHub's API is always current (60 reads/hour per phone, plenty); its file CDN can lag ~5 min
+// and is the fallback.
+const statusSources = () => {
   const q = new URLSearchParams(location.search).get("status");          // local testing only
-  if (q) return q;
+  if (q) return [[q, {}]];
   const owner = location.hostname.split(".")[0];
   const repo = location.pathname.split("/").filter(Boolean)[0] || "";
-  return "https://raw.githubusercontent.com/" + owner + "/" + repo + "/status/status.json";
+  return [["https://api.github.com/repos/" + owner + "/" + repo + "/contents/status.json?ref=status",
+           { headers: { Accept: "application/vnd.github.raw+json" } }],
+          ["https://raw.githubusercontent.com/" + owner + "/" + repo + "/status/status.json?t=" + Date.now(), {}]];
 };
+async function fetchStatus() {
+  let last = null;
+  for (const [url, opt] of statusSources()) {
+    try {
+      const r = await fetch(url, Object.assign({ cache: "no-store" }, opt));
+      if (r.ok) return await r.json();
+      last = new Error("status file " + r.status);
+    } catch (e) { last = e; }
+  }
+  throw last || new Error("status unavailable");
+}
 const b64ToBytes = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const usd = (v, dp = 2) => v == null ? "–" : (v < 0 ? "−$" : (v > 0 ? "+$" : "$")) + Math.abs(v).toFixed(dp);
 const usd0 = (v) => v == null ? "–" : "$" + Number(v).toFixed(0);
@@ -366,9 +381,7 @@ async function loadDash() {
   }
   try {
     $("#dashWhen").textContent = "Loading…";
-    const r = await fetch(statusUrl() + (statusUrl().includes("?") ? "&" : "?") + "t=" + Date.now(), { cache: "no-store" });
-    if (!r.ok) throw new Error("status file " + r.status);
-    const env = await r.json();
+    const env = await fetchStatus();
     const key = await crypto.subtle.importKey("raw", b64uToBytes(k), "AES-GCM", false, ["decrypt"]);
     const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64ToBytes(env.iv) }, key, b64ToBytes(env.ct));
     dashMsg("");

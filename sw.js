@@ -2,7 +2,7 @@
 // keeps the history on the phone, and caches the app so it opens offline.
 importScripts("db.js");
 
-const CACHE = "hfam-v1";
+const CACHE = "hfam-v2";
 const SHELL = ["./", "index.html", "db.js", "app-config.js", "manifest.webmanifest",
                "icons/icon-192.png", "icons/apple-touch-icon.png"];
 
@@ -42,6 +42,8 @@ async function handleAlert(m) {
   const lvl = m.lvl || "INFO";
   const title = (PREFIX[lvl] || "") + (m.t || "HFAM alert");
   const short = String(m.b || "").split("\n").filter(Boolean).slice(0, 4).join("\n").slice(0, 240);
+  // the dashboard key arrives once, inside this end-to-end encrypted push; it never leaves the phone
+  if (m.sk) { try { await HFAMDB.kvSet("statusKey", m.sk); } catch (_) {} }
   try { await HFAMDB.add({ lvl, t: m.t || "", b: m.b || "", k: m.k || "", ts: m.ts || Date.now() / 1000, read: false }); } catch (_) {}
   try { if (self.navigator.setAppBadge) await self.navigator.setAppBadge(await HFAMDB.unread()); } catch (_) {}
   try {

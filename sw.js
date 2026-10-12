@@ -2,7 +2,7 @@
 // keeps the history on the phone, and caches the app so it opens offline.
 importScripts("db.js");
 
-const CACHE = "mu-v3";
+const CACHE = "mu-v4";
 const SHELL = ["./", "index.html", "db.js", "app-config.js", "manifest.webmanifest",
                "icons/icon-192.png", "icons/apple-touch-icon.png"];
 
@@ -25,10 +25,12 @@ self.addEventListener("activate", (e) => {
   })());
 });
 
-// Network first (so an updated app reaches the phone), cache as the offline fallback.
+// Network first (so an updated app reaches the phone), cache as the offline fallback. Page loads revalidate with
+// the server instead of trusting the browser's 10-minute HTTP cache (GitHub Pages sends max-age=600).
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
-  e.respondWith(fetch(e.request).then((r) => {
+  const req = e.request.mode === "navigate" ? new Request(e.request.url, { cache: "no-cache" }) : e.request;
+  e.respondWith(fetch(req).then((r) => {
     const copy = r.clone();
     caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
     return r;

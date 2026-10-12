@@ -68,7 +68,7 @@ color:var(--bg);padding:10px 16px;border-radius:999px;font-size:14px;opacity:0;t
 .big.pos,.pos{color:var(--good)}.big.neg,.neg{color:var(--bad)}
 .spark{display:block;width:100%;height:46px;margin:6px 0 2px}
 .kvr{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line);font-size:14px}
-.kvr:last-child{border-bottom:0}.kvr span:first-child{color:var(--muted)}.kvr span:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.kvr:last-child{border-bottom:0}.kvr>span:first-child{color:var(--muted)}.kvr>span:last-child{text-align:right;font-variant-numeric:tabular-nums}
 .chips{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}.chips span{font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px;background:var(--chip)}
 .tbl{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
 .tbl th{font-size:11px;color:var(--muted);font-weight:600;text-align:right;padding:4px 4px 6px}.tbl td{padding:6px 4px;border-top:1px solid var(--line);text-align:right}
@@ -345,8 +345,37 @@ function renderBot(b) {
   return h + '</section>';
 }
 
+function renderGold(g) {
+  if (!g || g.error) return "";
+  const pills = '<span class="pill off">DRY RUN</span><span class="pill ' + (g.running ? "on" : "bad") + '">' +
+    (g.running ? esc(g.state) : "NOT RUNNING") + '</span>';
+  let h = '<section class="card bot"><div class="head"><b>Gold carry</b><span class="pills">' + pills + '</span></div>';
+  if (g.state !== "ON") return h + '<p>No virtual position' + (g.wait_note ? ": " + esc(g.wait_note) : ".") + '</p></section>';
+  const n = g.notional || 0;
+  const perDay = g.funding_rate_ann != null && g.fut_prem_ann != null ? (g.funding_rate_ann - g.fut_prem_ann) / 100 * n / 365 : null;
+  const days = g.fut_exp ? (g.fut_exp - Date.now() / 1000) / 86400 : null;
+  h += '<div class="big ' + cls(g.net_mark) + '">' + usd(g.net_mark) + '</div><p class="sub" style="margin:0">virtual P&amp;L (dry run: nothing real is held; taker prices and fees included)' +
+       (g.entered_ts ? " · " + ago(g.entered_ts).replace(" ago", "") : "") + '</p>' + sparkSvg(g.pnl_series);
+  const rows = [
+    ["Position", "short gold perpetual + long " + esc((g.fut || "").replace("XAU-USD_UM-", "future ")) + " · " + usd0(n) + " on " + usd0(g.capital)],
+    ["Perpetual leg", '<span class="' + cls(g.perp_pnl) + '">' + usd(g.perp_pnl) + '</span>'],
+    ["Future leg", '<span class="' + cls(g.fut_pnl) + '">' + usd(g.fut_pnl) + '</span>'],
+    ["Funding received", usd(g.funding, 4) + " (" + (g.fund_n || 0) + " payments)"],
+    ["Funding rate", pct(g.funding_rate_ann) + " a year"],
+    ["Future premium", pct(g.fut_prem_ann, 2) + " a year"],
+    ["Carry now", '<span class="' + cls(perDay) + '">' + usd(perDay) + '/day</span>'],
+    ["If closed now", '<span class="' + cls(g.net_exit) + '">' + usd(g.net_exit) + '</span>'],
+    ["Fees paid", "$" + (g.fees || 0).toFixed(2) + (g.rolls ? " · " + g.rolls + " rolls $" + (g.roll_cost || 0).toFixed(2) : "")],
+    ["Future expires", days != null ? Math.round(days) + " days (rolls 10 days before)" : "–"],
+    ["Future liquidity", (g.fut_spread_bp != null ? g.fut_spread_bp.toFixed(0) + "bp spread · " : "") + usd0(g.fut_vol24h_usd) + " traded in 24h"],
+  ];
+  if (g.ann_on_capital != null) rows.push(["Annualised on capital", '<span class="' + cls(g.ann_on_capital) + '">' + pct(g.ann_on_capital) + '</span>']);
+  h += rows.map((r) => '<div class="kvr"><span>' + r[0] + '</span><span>' + r[1] + '</span></div>').join("");
+  return h + '</section>';
+}
+
 function renderDash(st, ts) {
-  let h = (st.bots || []).map(renderBot).join("");
+  let h = (st.bots || []).map(renderBot).join("") + renderGold(st.gold);
   const acc = st.account || {};
   if (acc.total_eq != null) h += '<section class="card"><div class="kvr"><span>OKX account equity</span><span>' + usd0(acc.total_eq) +
     '</span></div><div class="kvr"><span>USDC</span><span>' + usd0(acc.usdc_eq) + '</span></div></section>';

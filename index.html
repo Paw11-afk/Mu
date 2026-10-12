@@ -155,7 +155,8 @@ color:var(--bg);padding:10px 16px;border-radius:999px;font-size:14px;opacity:0;t
   </footer>
   </div>
   <p class="small">Alerts and the dashboard come from the Mu watchdog on your PC (dashboard every 15 min).
-     If the PC is off, nothing updates. The dashboard is encrypted; only this phone holds its key.</p>
+     If the PC is off, nothing updates. The dashboard is encrypted; only this phone holds its key.
+     <br><span id="appVer"></span></p>
 </div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
@@ -422,7 +423,26 @@ async function loadDash() {
             'if it was just set up, try again shortly.</p>');
   }
 }
-$("#btnRefresh").addEventListener("click", loadDash);
+// A home-screen app can stay in memory for days, still running the code it started with: Refresh only re-reads the
+// data. So when the app comes back to the front, or Refresh is tapped, check whether a newer version is deployed and
+// reload once if it is (at most once per version every 10 minutes, so a stale CDN copy can never cause a loop).
+const APP_VERSION = "2026-10-12.3";
+async function checkUpdate() {
+  try {
+    const r = await fetch("index.html?v=" + Date.now(), { cache: "no-store" });
+    const m = (await r.text()).match(/const APP_VERSION = "([^"]+)"/);
+    if (!m || m[1] === APP_VERSION) return false;
+    let last = {};
+    try { last = JSON.parse(sessionStorage.getItem("mu.reloadedFor") || "{}"); } catch (_) {}
+    if (last.v === m[1] && Date.now() - last.t < 600000) return false;
+    try { sessionStorage.setItem("mu.reloadedFor", JSON.stringify({ v: m[1], t: Date.now() })); } catch (_) {}
+    if (reg) reg.update().catch(() => {});
+    location.reload();
+    return true;
+  } catch (_) { return false; }
+}
+$("#appVer").textContent = "App version " + APP_VERSION;
+$("#btnRefresh").addEventListener("click", async () => { if (!(await checkUpdate())) loadDash(); });
 
 (async () => {
   if ("serviceWorker" in navigator) {
@@ -448,8 +468,9 @@ $("#btnRefresh").addEventListener("click", loadDash);
     const s = await reg.pushManager.getSubscription();
     if (s) { localStorageSet("paired", s.endpoint); refreshSetup(); }
   }
-  document.addEventListener("visibilitychange", () => {
+  document.addEventListener("visibilitychange", async () => {
     if (document.hidden) return;
+    if (await checkUpdate()) return;                       // a newer app is deployed: reloading into it
     if ($("#viewDash").hidden) renderAlerts(); else loadDash();
   });
 })();

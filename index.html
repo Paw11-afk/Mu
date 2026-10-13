@@ -353,7 +353,8 @@ function renderGold(g) {
   let h = '<section class="card bot"><div class="head"><b>Gold carry</b><span class="pills">' + pills + '</span></div>';
   if (g.state !== "ON") return h + '<p>No virtual position' + (g.wait_note ? ": " + esc(g.wait_note) : ".") + '</p></section>';
   const n = g.notional || 0;
-  const perDay = g.funding_rate_ann != null && g.fut_prem_ann != null ? (g.funding_rate_ann - g.fut_prem_ann) / 100 * n / 365 : null;
+  const fr = g.funding_real_ann != null ? g.funding_real_ann : g.funding_rate_ann;   // RECEIVED once paid, not today's quote
+  const perDay = fr != null && g.fut_prem_ann != null ? (fr - g.fut_prem_ann) / 100 * n / 365 : null;
   const days = g.fut_exp ? (g.fut_exp - Date.now() / 1000) / 86400 : null;
   h += '<div class="big ' + cls(g.net_mark) + '">' + usd(g.net_mark) + '</div><p class="sub" style="margin:0">virtual P&amp;L (dry run: nothing real is held; taker prices and fees included)' +
        (g.entered_ts ? " · " + ago(g.entered_ts).replace(" ago", "") : "") + '</p>' + sparkSvg(g.pnl_series);
@@ -361,10 +362,10 @@ function renderGold(g) {
     ["Position", "short gold perpetual + long " + esc((g.fut || "").replace("XAU-USD_UM-", "future ")) + " · " + usd0(n) + " on " + usd0(g.capital)],
     ["Perpetual leg", '<span class="' + cls(g.perp_pnl) + '">' + usd(g.perp_pnl) + '</span>'],
     ["Future leg", '<span class="' + cls(g.fut_pnl) + '">' + usd(g.fut_pnl) + '</span>'],
-    ["Funding received", usd(g.funding, 4) + " (" + (g.fund_n || 0) + " payments)"],
-    ["Funding rate", pct(g.funding_rate_ann) + " a year"],
+    ["Funding received", usd(g.funding, 2) + " (" + (g.fund_n || 0) + " payments" + (g.funding_real_ann != null ? " = " + pct(g.funding_real_ann) + " a year" : "") + ")"],
+    ["Funding rate now", pct(g.funding_rate_ann) + " a year (next payment)"],
     ["Future premium", pct(g.fut_prem_ann, 2) + " a year"],
-    ["Carry now", '<span class="' + cls(perDay) + '">' + usd(perDay) + '/day</span>'],
+    [g.funding_real_ann != null ? "Carry (received − premium)" : "Carry (quoted − premium)", '<span class="' + cls(perDay) + '">' + usd(perDay) + '/day</span>'],
     ["If closed now", '<span class="' + cls(g.net_exit) + '">' + usd(g.net_exit) + '</span>'],
     ["Fees paid", "$" + (g.fees || 0).toFixed(2) + (g.rolls ? " · " + g.rolls + " rolls $" + (g.roll_cost || 0).toFixed(2) : "")],
     ["Future expires", days != null ? Math.round(days) + " days (rolls 10 days before)" : "–"],
@@ -426,7 +427,7 @@ async function loadDash() {
 // A home-screen app can stay in memory for days, still running the code it started with: Refresh only re-reads the
 // data. So when the app comes back to the front, or Refresh is tapped, check whether a newer version is deployed and
 // reload once if it is (at most once per version every 10 minutes, so a stale CDN copy can never cause a loop).
-const APP_VERSION = "2026-10-12.3";
+const APP_VERSION = "2026-10-13.1";
 async function checkUpdate() {
   try {
     const r = await fetch("index.html?v=" + Date.now(), { cache: "no-store" });

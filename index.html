@@ -31,6 +31,7 @@ h2{font-size:15px;margin:22px 0 8px;color:var(--muted);font-weight:600;text-tran
 .pill{font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--chip);white-space:nowrap}
 .pill.on{color:var(--good)}.pill.off{color:var(--warn)}.pill.bad{color:var(--bad)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
+.card.alarm{border:2px solid var(--bad)}.card.alarm h3{color:var(--bad)}
 .card h3{margin:0 0 6px;font-size:17px}.card p{margin:6px 0;color:var(--muted);font-size:14px}
 ol{margin:8px 0 0;padding-left:22px;font-size:15px}ol li{margin:6px 0}
 button{font:inherit;font-weight:600;border:0;border-radius:12px;min-height:46px;padding:0 18px;cursor:pointer;
@@ -317,9 +318,11 @@ function sparkSvg(pts) {
     '<path d="' + d + '" fill="none" stroke="' + (last >= 0 ? "var(--good)" : "var(--bad)") + '" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>';
 }
 
-function renderBot(b) {
-  const pills = '<span class="pill ' + (b.dry_run ? "off" : "on") + '">' + (b.dry_run ? "DRY RUN" : "LIVE") + '</span>' +
-    '<span class="pill ' + (b.running ? "on" : "bad") + '">' + (b.running ? esc(b.state) : "NOT RUNNING") + '</span>';
+function renderBot(b, stale) {
+  // stale: this snapshot is old, so "running" only says what WAS true then -- never show it as a live green ON
+  const run = stale ? '<span class="pill bad">LAST SEEN ' + (b.running ? esc(b.state) : "NOT RUNNING") + '</span>'
+                    : '<span class="pill ' + (b.running ? "on" : "bad") + '">' + (b.running ? esc(b.state) : "NOT RUNNING") + '</span>';
+  const pills = '<span class="pill ' + (b.dry_run ? "off" : "on") + '">' + (b.dry_run ? "DRY RUN" : "LIVE") + '</span>' + run;
   let h = '<section class="card bot"><div class="head"><b>' + esc(b.asset) + ' carry</b><span class="pills">' + pills + '</span></div>';
   if (b.allin === undefined) return h + '<p>No position.</p></section>';
   const det = b.tilt_detail || {}, up = Object.values(det).filter((v) => v).length, n = Object.keys(det).length;
@@ -346,10 +349,10 @@ function renderBot(b) {
   return h + '</section>';
 }
 
-function renderGold(g) {
+function renderGold(g, stale) {
   if (!g || g.error) return "";
-  const pills = '<span class="pill off">DRY RUN</span><span class="pill ' + (g.running ? "on" : "bad") + '">' +
-    (g.running ? esc(g.state) : "NOT RUNNING") + '</span>';
+  const pills = '<span class="pill off">DRY RUN</span><span class="pill ' + (g.running && !stale ? "on" : "bad") + '">' +
+    (stale ? "LAST SEEN " : "") + (g.running ? esc(g.state) : "NOT RUNNING") + '</span>';
   let h = '<section class="card bot"><div class="head"><b>Gold carry</b><span class="pills">' + pills + '</span></div>';
   if (g.state !== "ON") return h + '<p>No virtual position' + (g.wait_note ? ": " + esc(g.wait_note) : ".") + '</p></section>';
   const n = g.notional || 0;
@@ -376,8 +379,28 @@ function renderGold(g) {
   return h + '</section>';
 }
 
+const STALE_S = 1800;                    // the PC publishes every 15 min: two missed uploads = something is down
+const dur = (s) => s < 5400 ? Math.round(s / 60) + " min" : (s / 3600).toFixed(1) + " h";
+function alarmHTML(st, age) {
+  if (age > STALE_S) {
+    return '<section class="card alarm"><h3>No update from the PC for ' + dur(age) + '</h3><p>Everything below is how it was at ' +
+      new Date((st.generated_ts || 0) * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) +
+      ' — not now. The PC, the watchdog or its internet connection is down. Open positions stay protected by the server-side ' +
+      'stops on OKX, but nothing else manages them until the PC is back.</p></section>';
+  }
+  const LIVE_ST = ["OPENING", "ON", "DELEVERING", "REHEDGING", "RESIZING", "CLOSING", "HALT"];
+  const down = (st.bots || []).filter((b) => !b.dry_run && LIVE_ST.includes(b.state) && !b.running);
+  if (!down.length) return "";
+  return '<section class="card alarm"><h3>' + down.map((b) => esc(b.asset)).join(", ") + ' live bot' + (down.length > 1 ? "s" : "") +
+    ' NOT RUNNING</h3><p>' + (down.length > 1 ? "Their positions are" : "Its position is") + ' open on OKX but not managed: no TILT, ' +
+    'no de-lever. The server-side stops still protect ' + (down.length > 1 ? "them" : "it") + '. Start the bots on the PC ' +
+    '(double-click hfam_startup.bat).</p></section>';
+}
+
 function renderDash(st, ts) {
-  let h = (st.bots || []).map(renderBot).join("") + renderGold(st.gold);
+  const age = Date.now() / 1000 - (st.generated_ts || ts);
+  const stale = age > STALE_S;
+  let h = alarmHTML(st, age) + (st.bots || []).map((b) => renderBot(b, stale)).join("") + renderGold(st.gold, stale);
   const acc = st.account || {};
   if (acc.total_eq != null) h += '<section class="card"><div class="kvr"><span>OKX account equity</span><span>' + usd0(acc.total_eq) +
     '</span></div><div class="kvr"><span>USDC</span><span>' + usd0(acc.usdc_eq) + '</span></div></section>';
@@ -427,7 +450,7 @@ async function loadDash() {
 // A home-screen app can stay in memory for days, still running the code it started with: Refresh only re-reads the
 // data. So when the app comes back to the front, or Refresh is tapped, check whether a newer version is deployed and
 // reload once if it is (at most once per version every 10 minutes, so a stale CDN copy can never cause a loop).
-const APP_VERSION = "2026-10-13.1";
+const APP_VERSION = "2026-10-14.1";
 async function checkUpdate() {
   try {
     const r = await fetch("index.html?v=" + Date.now(), { cache: "no-store" });

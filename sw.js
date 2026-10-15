@@ -2,7 +2,7 @@
 // keeps the history on the phone, and caches the app so it opens offline.
 importScripts("db.js");
 
-const CACHE = "mu-v4";
+const CACHE = "mu-v6";
 const SHELL = ["./", "index.html", "db.js", "app-config.js", "manifest.webmanifest",
                "icons/icon-192.png", "icons/apple-touch-icon.png"];
 
@@ -30,9 +30,12 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
   const req = e.request.mode === "navigate" ? new Request(e.request.url, { cache: "no-cache" }) : e.request;
+  const cacheable = !new URL(e.request.url).search;     // update checks (?v=...) and API calls are never stored
   e.respondWith(fetch(req).then((r) => {
-    const copy = r.clone();
-    caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+    if (cacheable && r.ok) {
+      const copy = r.clone();
+      caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+    }
     return r;
   }).catch(() => caches.match(e.request).then((r) => r || caches.match("index.html"))));
 });
@@ -46,6 +49,9 @@ async function handleAlert(m) {
   const short = String(m.b || "").split("\n").filter(Boolean).slice(0, 4).join("\n").slice(0, 240);
   // the dashboard key arrives once, inside this end-to-end encrypted push; it never leaves the phone
   if (m.sk) { try { await HFAMDB.kvSet("statusKey", m.sk); } catch (_) {} }
+  // a remote close/resume request waiting for this phone's confirmation: its one-time code is kept apart from the alert
+  // history (only t and b are stored below), so it never shows up in the Alerts list
+  if (m.cc) { try { await HFAMDB.kvSet("closeConfirm", m.cc); } catch (_) {} }
   try { await HFAMDB.add({ lvl, t: m.t || "", b: m.b || "", k: m.k || "", ts: m.ts || Date.now() / 1000, read: false }); } catch (_) {}
   try { if (self.navigator.setAppBadge) await self.navigator.setAppBadge(await HFAMDB.unread()); } catch (_) {}
   try {

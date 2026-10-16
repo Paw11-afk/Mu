@@ -348,6 +348,9 @@ function renderBot(b, stale) {
   ];
   if (b.tilt) rows.push(["TILT", up + "/" + n + " signals up → hedge " + Math.round((b.tilt_h || 1) * 100) + "% (target " +
                          esc(b.tilt_target_ct ?? "?") + " ct)"]);
+  if (b.tilt_pnl != null) rows.push(["TILT slice P&amp;L", '<span class="' + cls(b.tilt_pnl) + '">' + usd(b.tilt_pnl) + '</span>' +
+                                    (b.pnl_since ? " since " + new Date(b.pnl_since * 1000).toLocaleDateString([], { day: "numeric", month: "short" }) : "")]);
+  if (b.leg_pnl != null) rows.push(["Legging P&amp;L", '<span class="' + cls(b.leg_pnl) + '">' + usd(b.leg_pnl) + '</span>']);
   h += rows.map((r) => '<div class="kvr"><span>' + r[0] + '</span><span>' + r[1] + '</span></div>').join("");
   if (n) h += '<div class="chips">' + Object.entries(det).map(([k, v]) => '<span class="' + (v ? "pos" : "neg") + '">' +
               esc(k) + " " + (v ? "up" : "down") + '</span>').join("") + '</div>';
@@ -594,7 +597,7 @@ $("#pendingBox").addEventListener("click", onRemoteClick);
 // A home-screen app can stay in memory for days, still running the code it started with: Refresh only re-reads the
 // data. So when the app comes back to the front, or Refresh is tapped, check whether a newer version is deployed and
 // reload once if it is (at most once per version every 10 minutes, so a stale CDN copy can never cause a loop).
-const APP_VERSION = "2026-10-16.1";
+const APP_VERSION = "2026-10-16.2";
 async function checkUpdate() {
   try {
     const r = await fetch("index.html?v=" + Date.now(), { cache: "no-store" });

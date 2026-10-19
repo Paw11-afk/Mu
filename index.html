@@ -321,15 +321,33 @@ function sparkSvg(pts) {
     '<path d="' + d + '" fill="none" stroke="' + (last >= 0 ? "var(--good)" : "var(--bad)") + '" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>';
 }
 
-function renderBot(b, stale) {
+function closedRows(c) {                 // one closed position's final P&L, from OKX's records (the watchdog)
+  return [["Held", new Date(c.opened_ts * 1000).toLocaleDateString([], { day: "numeric", month: "short" }) + " → " +
+             new Date(c.closed_ts * 1000).toLocaleDateString([], { day: "numeric", month: "short" }) + " (" + Number(c.days).toFixed(1) + " days)"],
+          ["Funding received", '<span class="' + cls(c.funding) + '">' + usd(c.funding) + '</span>'],
+          ["Fees", '<span class="neg">' + usd(-c.fees) + '</span>'],
+          ["Price and spreads", '<span class="' + cls(c.price) + '">' + usd(c.price) + '</span>']]
+    .map((r) => '<div class="kvr"><span>' + r[0] + '</span><span>' + r[1] + '</span></div>').join("");
+}
+function closedHTML(list) {
+  if (!list || !list.length) return "";
+  return '<section class="card"><div class="head"><b>Closed positions</b><span class="pills"><span class="pill off">FINAL P&amp;L</span></span></div>' +
+    list.slice().reverse().map((c) => '<div class="kvr"><span><b>' + esc(c.asset) + '</b> · closed ' +
+      new Date(c.closed_ts * 1000).toLocaleDateString([], { day: "numeric", month: "short" }) + '</span><span class="' + cls(c.total) + '"><b>' +
+      usd(c.total) + '</b></span></div>').join("") +
+    '<p class="sub" style="margin:6px 0 0">After costs: funding, fees, price and spreads, from OKX&rsquo;s own records.</p></section>';
+}
+function renderBot(b, stale, closed) {
   // stale: this snapshot is old, so "running" only says what WAS true then -- never show it as a live green ON
   const run = stale ? '<span class="pill bad">LAST SEEN ' + (b.running ? esc(b.state) : "NOT RUNNING") + '</span>'
                     : '<span class="pill ' + (b.running ? "on" : "bad") + '">' + (b.running ? esc(b.state) : "NOT RUNNING") + '</span>';
   const pills = '<span class="pill ' + (b.dry_run ? "off" : "on") + '">' + (b.dry_run ? "DRY RUN" : "LIVE") + '</span>' + run +
     (b.hold_flat ? '<span class="pill bad">HELD FLAT</span>' : "");
   let h = '<section class="card bot"><div class="head"><b>' + esc(b.asset) + ' carry</b><span class="pills">' + pills + '</span></div>';
+  const lc = (closed || []).filter((c) => c.asset === b.asset).slice(-1)[0];
   if (b.allin === undefined) return h + '<p>No position.' + (b.hold_flat ? " Closed from this app; the bot stays out until you press Resume." : "") +
-    '</p>' + botButtons(b) + '</section>';
+    '</p>' + (lc ? '<div class="big ' + cls(lc.total) + '">' + usd(lc.total) + '</div><p class="sub" style="margin:0">final P&amp;L of the last position</p>' +
+                   closedRows(lc) : "") + botButtons(b) + '</section>';
   const det = b.tilt_detail || {}, up = Object.values(det).filter((v) => v).length, n = Object.keys(det).length;
   const fp = b.funding_proj ? " (" + Math.round(b.funding_real / b.funding_proj * 100) + "% of projected)" : "";
   h += '<div class="big ' + cls(b.allin) + '">' + usd(b.allin) + '</div><p class="sub" style="margin:0">' +
@@ -467,8 +485,8 @@ function remoteHTML(st, stale) {
 function renderDash(st, ts) {
   const age = Date.now() / 1000 - (st.generated_ts || ts);
   const stale = age > STALE_S;
-  let h = alarmHTML(st, age) + (st.bots || []).map((b) => renderBot(b, stale)).join("") +
-    renderGold(st.gold, stale) + remoteHTML(st, stale);
+  let h = alarmHTML(st, age) + (st.bots || []).map((b) => renderBot(b, stale, st.closed)).join("") +
+    closedHTML(st.closed) + renderGold(st.gold, stale) + remoteHTML(st, stale);
   const acc = st.account || {};
   if (acc.total_eq != null) h += '<section class="card"><div class="kvr"><span>OKX account equity</span><span>' + usd0(acc.total_eq) +
     '</span></div><div class="kvr"><span>USDC</span><span>' + usd0(acc.usdc_eq) + '</span></div></section>';
@@ -597,7 +615,7 @@ $("#pendingBox").addEventListener("click", onRemoteClick);
 // A home-screen app can stay in memory for days, still running the code it started with: Refresh only re-reads the
 // data. So when the app comes back to the front, or Refresh is tapped, check whether a newer version is deployed and
 // reload once if it is (at most once per version every 10 minutes, so a stale CDN copy can never cause a loop).
-const APP_VERSION = "2026-10-16.2";
+const APP_VERSION = "2026-10-19.1";
 async function checkUpdate() {
   try {
     const r = await fetch("index.html?v=" + Date.now(), { cache: "no-store" });

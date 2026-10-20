@@ -337,7 +337,7 @@ function closedHTML(list) {
       usd(c.total) + '</b></span></div>').join("") +
     '<p class="sub" style="margin:6px 0 0">After costs: funding, fees, price and spreads, from OKX&rsquo;s own records.</p></section>';
 }
-function renderBot(b, stale, closed) {
+function renderBot(b, stale, closed) {   // b.nic_now: the bot's own 'net if closed now' (real fills, exit prices, all costs)
   // stale: this snapshot is old, so "running" only says what WAS true then -- never show it as a live green ON
   const run = stale ? '<span class="pill bad">LAST SEEN ' + (b.running ? esc(b.state) : "NOT RUNNING") + '</span>'
                     : '<span class="pill ' + (b.running ? "on" : "bad") + '">' + (b.running ? esc(b.state) : "NOT RUNNING") + '</span>';
@@ -375,11 +375,28 @@ function renderBot(b, stale, closed) {
   return h + botButtons(b) + '</section>';
 }
 
+let REMOTE_V = 0;                         // the PC's remote protocol (status.remote.v): take-profit needs 2
+const nowBtn = (arg, label) => REMOTE_V >= 2    // CLOSE NOW: close_force on a 10-19 PC, a plain close (= close now) before
+  ? '<button class="secondary" data-remote="close_force" data-arg="' + arg + '">' + label + '</button>'
+  : '<button class="secondary" data-remote="close" data-now="1" data-arg="' + arg + '">' + label + '</button>';
 function botButtons(b) {                 // live bots only; a dry run holds nothing real
   if (b.dry_run) return "";
   let h = "";
-  if (b.state === "ON" && b.running) h += '<button class="danger" data-remote="close" data-arg="' + esc(b.asset) +
-    '">Close ' + esc(b.asset) + ' (take profit)</button>';
+  const A = esc(b.asset);
+  if (b.state === "ON" && b.running) {
+    if (REMOTE_V >= 2 && (b.remote_ok || 0) >= 2) {
+      h += b.tp_target
+        ? '<p class="sub">Take-profit armed: ' + A + ' closes by itself when what closing would leave reaches <b>' +
+          usd(b.tp_target.usd) + '</b> (now ' + usd(b.nic_now) + ').</p><button class="secondary" data-remote="tp_clear" data-arg="' +
+          A + '">Cancel take-profit</button>'
+        : '<p class="sub">Take profit when what closing would leave, after every cost, is at least $' +
+          '<input id="tp-' + A + '" type="number" inputmode="decimal" step="0.5" value="0" style="width:72px"> ' +
+          '(now ' + usd(b.nic_now) + ')</p><button class="danger" data-remote="close" data-arg="' + A + '">Take profit ' + A + '</button>';
+    } else {
+      h += '<p class="sub">Take-profit needs the PC restarted on the 10-19 code (watchdog and this bot).</p>';
+    }
+    h += nowBtn(A, "Close " + A + " now, even at a loss");
+  }
   if (b.hold_flat) h += '<button class="secondary" data-remote="resume" data-arg="' + esc(b.asset) + '">Resume ' +
     esc(b.asset) + '</button>';
   if (b.state === "HALT") h += '<p class="sub">HALTED: it needs a review on the PC; remote close is not available.</p>';
@@ -437,17 +454,22 @@ function alarmHTML(st, age) {
 const CONFIRM_MARGIN_S = 60;              // confirm a minute before the PC's deadline: the relay and its poll take time
 function pendingHTML(cc, mine) {
   if (!cc || !cc.exp || cc.exp - CONFIRM_MARGIN_S < Date.now() / 1000) return "";
-  const verb = cc.cmd === "close" ? "close" : "resume trading on";
+  const tp = cc.cmd === "close" && cc.val != null;
+  const verb = tp ? "take profit at " + usd(cc.val) + " on" : (cc.cmd === "close" || cc.cmd === "close_force") ? "close NOW (even at a loss)"
+    : cc.cmd === "tp_clear" ? "cancel the take-profit on" : "resume trading on";
+  const m = mine && mine[cc.rn];                 // mine only if nonce AND command, coin and amount all match what was sent
+  const sentTP = !!m && m.val != null;           // a take-profit sent must come back as that take-profit, and v.v.
+  const isMine = !!m && m.cmd === cc.cmd && m.arg === cc.arg && sentTP === tp && (!tp || Math.abs(m.val - cc.val) < 0.005);
   const what = esc((cc.targets && cc.targets.length ? cc.targets : [cc.arg]).join(", "));
   const until = new Date((cc.exp - CONFIRM_MARGIN_S) * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  if (!mine || !mine[cc.rn]) {              // the PC got a request this phone never sent
+  if (!isMine) {                             // the PC got a request this phone never sent (or not as sent)
     return '<section class="card alarm"><h3>Request NOT sent from this phone: ' + verb + ' ' + what + '</h3><p>The PC received ' +
       'a request that did not come from this phone. Someone may have your Mu key. Nothing happens unless it is ' +
       'confirmed. Tap Report to cancel it and alert the PC, then re-pair this phone on the PC.</p>' +
       '<div class="btns"><button class="danger" data-report="1" data-rn="' + esc(cc.rn) + '">Report and cancel</button></div></section>';
   }
   return '<section class="card alarm"><h3>Confirm: ' + verb + ' ' + what + '</h3><p>Requested from this phone at ' +
-    new Date(mine[cc.rn].ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + '. The PC acts only when you ' +
+    new Date(m.ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + '. The PC acts only when you ' +
     'confirm, before ' + until + '.</p><div class="btns"><button class="danger" data-confirm="1" data-rn="' + esc(cc.rn) +
     '">Confirm</button><button class="secondary" data-cancel="1" data-rn="' + esc(cc.rn) + '">Cancel</button></div></section>';
 }
@@ -469,15 +491,20 @@ function remoteHTML(st, stale) {
   const live = (st.bots || []).filter((b) => !b.dry_run);
   const anyOpen = live.some((b) => b.state === "ON" && b.running);
   const anyHeld = live.some((b) => b.hold_flat);
+  const anyTP = REMOTE_V >= 2 && live.some((b) => b.state === "ON" && b.running && (b.remote_ok || 0) >= 2);
   const link = r.err ? '<span class="neg">' + esc(r.err) + '</span>' : (r.ok_ts ? "checked " + ago(r.ok_ts) : "not checked yet");
   return '<h2>Remote control</h2><section class="card">' +
     '<div class="kvr"><span>PC checks for commands</span><span>' + link + '</span></div>' +
     '<div class="btns"><button data-remote="start_bots">Restart system</button>' +
     '<button class="secondary" data-remote="ping">Test connection</button></div>' +
-    (anyOpen ? '<div class="btns"><button class="danger" data-remote="close" data-arg="ALL">Close all positions</button></div>' : "") +
+    (anyOpen ? '<div class="btns">' + (anyTP ? '<button class="danger" data-remote="close" data-arg="ALL">Take profit on all (at ≥ $0)</button>' : "") +
+               nowBtn("ALL", "Close all now, even at a loss") + '</div>' : "") +
     (anyHeld ? '<div class="btns"><button class="secondary" data-remote="resume" data-arg="ALL">Resume all</button></div>' : "") +
     '<p class="sub" style="margin:10px 0 0">Restart system does what double-clicking hfam_startup.bat does: it starts whatever ' +
-    'is not running. Close sells the coins and buys back the short, then the bot stays out until Resume. Close and Resume ' +
+    'is not running. Take profit closes a position only once what closing would leave, after every cost and a small slippage ' +
+    'margin, is at least the amount you set (default $0, break-even) on two checks in a row; until then the bot keeps running ' +
+    'and closes by itself when it gets there. Close now ' +
+    'sells at today\'s prices, even at a loss. Either way the bot then stays out until Resume. These and Resume ' +
     'need a second tap: the PC sends a confirmation to this phone. The PC acts within about a minute, and only while it is on.' +
     (stale ? ' <b class="neg">The PC has not reported recently, so commands may not arrive.</b>' : "") + '</p></section>';
 }
@@ -485,6 +512,7 @@ function remoteHTML(st, stale) {
 function renderDash(st, ts) {
   const age = Date.now() / 1000 - (st.generated_ts || ts);
   const stale = age > STALE_S;
+  REMOTE_V = (st.remote || {}).v || 0;
   let h = alarmHTML(st, age) + (st.bots || []).map((b) => renderBot(b, stale, st.closed)).join("") +
     closedHTML(st.closed) + renderGold(st.gold, stale) + remoteHTML(st, stale);
   const acc = st.account || {};
@@ -505,7 +533,10 @@ function renderDash(st, ts) {
   const act = Object.entries((st.watchdog || {}).active || {});
   h += '<h2>Watchdog</h2><section class="card">' + (act.length ? act.map(([k, l]) => '<div class="kvr"><span>' + esc(k) + '</span><span class="' +
        (l === "CRITICAL" ? "neg" : "") + '">' + esc(l) + '</span></div>').join("") : '<p class="pos" style="margin:0">All clear — nothing active.</p>') + '</section>';
+  const typed = {};                                   // a refresh must not wipe a take-profit amount being typed
+  document.querySelectorAll('#dash input[id^="tp-"]').forEach((i) => { if (i.value !== "0") typed[i.id] = i.value; });
   $("#dash").innerHTML = h;
+  for (const [id, v] of Object.entries(typed)) { const i = document.getElementById(id); if (i) i.value = v; }
   $("#dashWhen").textContent = "Updated " + ago(ts) + " · " + new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
@@ -556,9 +587,9 @@ async function sendCmd(cmd, extra) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: enc.encode("mu-cmd-v1") }, key,
                                          enc.encode(JSON.stringify(body)));
-  if (cmd === "close" || cmd === "resume") {       // remembered BEFORE sending, so the PC's answer is recognised
+  if (["close", "close_force", "tp_clear", "resume"].includes(cmd)) {   // remembered BEFORE sending: the PC's answer is recognised
     const mine = await myRequests();
-    mine[body.nonce] = { cmd, arg: body.arg, ts: body.ts };
+    mine[body.nonce] = { cmd, arg: body.arg, val: body.val, ts: body.ts };
     await HFAMDB.kvSet("myRequests", mine);
   }
   const r = await fetch(RELAY + "/" + topic, { method: "POST", body: JSON.stringify({ v: 1, iv: bytesToB64(iv), ct: bytesToB64(ct) }) });
@@ -567,14 +598,20 @@ async function sendCmd(cmd, extra) {
 }
 const ASK = {
   start_bots: () => "Restart the system on the PC? It starts whatever is not running and leaves the rest alone.",
-  close: (w) => "Close " + w + "? The bot sells the coins and buys back the short, then stays out until you press Resume. " +
-                "You will be asked to confirm once more.",
+  close: (w, v) => "Take profit on " + w + " at " + usd(v) + "? It closes once what closing would leave, after every cost and a small " +
+                   "slippage margin, is at least " + usd(v) + " on two checks in a row (about a minute apart) -- now if it is " +
+                   "already there, otherwise by itself later. Then it stays out until Resume. You will be asked to confirm once more.",
+  close_force: (w) => "Close " + w + " NOW, even at a loss? The bot sells the coins and buys back the short at today's prices, " +
+                      "then stays out until you press Resume. You will be asked to confirm once more.",
+  tp_clear: (w) => "Cancel the take-profit on " + w + "? The position keeps running under its normal rules.",
   resume: (w) => "Resume trading on " + w + "? The bot may open again under its normal rules. You will be asked to confirm once more.",
 };
 const SENT = {
   start_bots: "Sent. The PC starts the system within about a minute.",
   ping: "Test sent. A notification should arrive within about a minute.",
   close: "Sent. A confirmation request arrives on this phone within about a minute.",
+  close_force: "Sent. A confirmation request arrives on this phone within about a minute.",
+  tp_clear: "Sent. A confirmation request arrives on this phone within about a minute.",
   resume: "Sent. A confirmation request arrives on this phone within about a minute.",
 };
 async function onRemoteClick(e) {
@@ -600,8 +637,21 @@ async function onRemoteClick(e) {
     }
     const cmd = b.dataset.remote, arg = b.dataset.arg;
     const what = arg === "ALL" ? "ALL live positions" : arg;
-    if (ASK[cmd] && !confirm(ASK[cmd](what))) return;
-    await sendCmd(cmd, arg ? { arg } : null);
+    let val = null;
+    if (cmd === "close" && b.dataset.now) {           // close NOW on a pre-10-19 PC (plain close, no amount)
+      if (!confirm(ASK.close_force(what))) return;
+      await sendCmd("close", { arg });
+      toast(SENT.close_force);
+      return;
+    }
+    if (cmd === "close") {                            // the take-profit amount: this coin's box, or $0 for all
+      const box = arg !== "ALL" ? document.getElementById("tp-" + arg) : null;
+      if (box && box.validity && box.validity.badInput) { toast("Enter an amount in dollars, e.g. 0 or 2.50"); return; }
+      val = box && box.value !== "" ? Math.round(Number(box.value) * 100) / 100 : 0;
+      if (!Number.isFinite(val) || val < -1000 || val > 100000) { toast("Enter an amount in dollars, e.g. 0 or 2.50"); return; }
+    }
+    if (ASK[cmd] && !confirm(ASK[cmd](what, val))) return;
+    await sendCmd(cmd, arg ? Object.assign({ arg }, val !== null ? { val } : {}) : null);
     toast(SENT[cmd]);
   } catch (err) {
     toast("Could not send: " + (err.message || err));
@@ -615,7 +665,7 @@ $("#pendingBox").addEventListener("click", onRemoteClick);
 // A home-screen app can stay in memory for days, still running the code it started with: Refresh only re-reads the
 // data. So when the app comes back to the front, or Refresh is tapped, check whether a newer version is deployed and
 // reload once if it is (at most once per version every 10 minutes, so a stale CDN copy can never cause a loop).
-const APP_VERSION = "2026-10-19.1";
+const APP_VERSION = "2026-10-19.2";
 async function checkUpdate() {
   try {
     const r = await fetch("index.html?v=" + Date.now(), { cache: "no-store" });

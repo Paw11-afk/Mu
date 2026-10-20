@@ -2,7 +2,7 @@
 // keeps the history on the phone, and caches the app so it opens offline.
 importScripts("db.js");
 
-const CACHE = "mu-v7";
+const CACHE = "mu-v8";
 const SHELL = ["./", "index.html", "db.js", "app-config.js", "manifest.webmanifest",
                "icons/icon-192.png", "icons/apple-touch-icon.png"];
 

@@ -376,11 +376,18 @@ function renderBot(b, stale, closed) {   // b.nic_now: the bot's own 'net if clo
 }
 
 let REMOTE_V = 0;                         // the PC's remote protocol (status.remote.v): take-profit needs 2
+let GOLIVE = {}, GOLIVE_WAIT = false;      // plan coins that may go live (status.golive), and the 24 h limit
 const nowBtn = (arg, label) => REMOTE_V >= 2    // CLOSE NOW: close_force on a 10-19 PC, a plain close (= close now) before
   ? '<button class="secondary" data-remote="close_force" data-arg="' + arg + '">' + label + '</button>'
   : '<button class="secondary" data-remote="close" data-now="1" data-arg="' + arg + '">' + label + '</button>';
-function botButtons(b) {                 // live bots only; a dry run holds nothing real
-  if (b.dry_run) return "";
+function botButtons(b) {                 // live bots; a dry run only offers Go live when it is a plan coin
+  if (b.dry_run) {
+    const g = REMOTE_V >= 3 && GOLIVE[b.asset];
+    if (!g) return "";
+    return '<div class="btns">' + (GOLIVE_WAIT ? '<p class="sub">Go live: one coin per 24 hours, the last was under 24 hours ago.</p>'
+      : '<button class="danger" data-remote="go_live" data-arg="' + esc(b.asset) + '">Go live ' + esc(b.asset) + ' (' + usd0(g.spot_usd) +
+        ' hedged)</button>') + '</div>';
+  }
   let h = "";
   const A = esc(b.asset);
   if (b.state === "ON" && b.running) {
@@ -514,11 +521,27 @@ function remoteHTML(st, stale) {
     (stale ? ' <b class="neg">The PC has not reported recently, so commands may not arrive.</b>' : "") + '</p></section>';
 }
 
+function goliveHTML(st) {             // plan coins not live yet (shown right after the coin cards)
+  let h = "";
+  const gl = REMOTE_V >= 3 ? (st.golive || []) : [];
+  if (gl.length) {
+    const last = (st.remote || {}).golive_ts || 0, wait = last && Date.now() / 1000 - last < 86400;
+    h += '<h2>Ready to go live</h2><section class="card">' + gl.map((g) => '<div class="kvr"><span><b>' + esc(g.asset) + '</b> · ' +
+      usd0(g.spot_usd) + ' hedged · ' + pct(g.net) + '/yr on capital' + (g.dry_state ? ' · ' + esc(g.dry_state) : '') + '</span>' +
+      (wait ? '' : '<button class="danger" data-remote="go_live" data-arg="' + esc(g.asset) + '">Go live</button>') + '</div>').join("") +
+      '<p class="sub" style="margin:8px 0 0">In the allocator\'s plan but not live yet, so its capital sits in USDC. Go live stops the dry ' +
+      'run and starts a live bot, which opens by itself (sized from the plan, 100% hedged, only if the margin pool can take it). ' +
+      'One coin per 24 hours; it needs a second tap.' + (wait ? ' <b>The last go-live was under 24 hours ago.</b>' : '') + '</p></section>';
+  }
+  return h;
+}
 function renderDash(st, ts) {
   const age = Date.now() / 1000 - (st.generated_ts || ts);
   const stale = age > STALE_S;
   REMOTE_V = (st.remote || {}).v || 0;
-  let h = alarmHTML(st, age) + (st.bots || []).map((b) => renderBot(b, stale, st.closed)).join("") +
+  GOLIVE = {}; (REMOTE_V >= 3 ? (st.golive || []) : []).forEach((g) => { GOLIVE[g.asset] = g; });
+  GOLIVE_WAIT = !!((st.remote || {}).golive_ts && Date.now() / 1000 - st.remote.golive_ts < 86400);
+  let h = alarmHTML(st, age) + (st.bots || []).map((b) => renderBot(b, stale, st.closed)).join("") + goliveHTML(st) +
     closedHTML(st.closed) + renderGold(st.gold, stale) + remoteHTML(st, stale);
   const acc = st.account || {};
   if (acc.total_eq != null) h += '<section class="card"><div class="kvr"><span>OKX account equity</span><span>' + usd0(acc.total_eq) +
@@ -531,16 +554,6 @@ function renderDash(st, ts) {
       (al.dropped || []).map((d) => '<tr><td><b>' + esc(d.asset) + '</b></td><td class="neg">drop</td><td colspan="3">' + esc(d.why) + '</td></tr>').join("") +
       '</table><p class="sub" style="margin:8px 0 0">Expected ~' + usd0(al.expected_carry_usd_yr) + '/yr (' + pct(al.expected_carry_pct) + ' on ' +
       usd0(al.capital_usd) + ')' + ((al.notes || []).length ? ". " + esc(al.notes.join(". ")) : "") + '</p></section>';
-  }
-  const gl = REMOTE_V >= 3 ? (st.golive || []) : [];
-  if (gl.length) {
-    const last = (st.remote || {}).golive_ts || 0, wait = last && Date.now() / 1000 - last < 86400;
-    h += '<h2>Ready to go live</h2><section class="card">' + gl.map((g) => '<div class="kvr"><span><b>' + esc(g.asset) + '</b> · ' +
-      usd0(g.spot_usd) + ' hedged · ' + pct(g.net) + '/yr on capital' + (g.dry_state ? ' · ' + esc(g.dry_state) : '') + '</span>' +
-      (wait ? '' : '<button class="danger" data-remote="go_live" data-arg="' + esc(g.asset) + '">Go live</button>') + '</div>').join("") +
-      '<p class="sub" style="margin:8px 0 0">In the allocator\'s plan but not live yet, so its capital sits in USDC. Go live stops the dry ' +
-      'run and starts a live bot, which opens by itself (sized from the plan, 100% hedged, only if the margin pool can take it). ' +
-      'One coin per 24 hours; it needs a second tap.' + (wait ? ' <b>The last go-live was under 24 hours ago.</b>' : '') + '</p></section>';
   }
   const sc = st.screen;
   if (sc && sc.top) h += '<h2>Carry screen · ' + esc(sc.eligible) + ' of ' + esc(sc.universe) + ' pass</h2><section class="card"><table class="tbl"><tr><th>#</th><th>Coin</th><th>On capital</th><th>Funding</th></tr>' +
@@ -685,7 +698,7 @@ $("#pendingBox").addEventListener("click", onRemoteClick);
 // A home-screen app can stay in memory for days, still running the code it started with: Refresh only re-reads the
 // data. So when the app comes back to the front, or Refresh is tapped, check whether a newer version is deployed and
 // reload once if it is (at most once per version every 10 minutes, so a stale CDN copy can never cause a loop).
-const APP_VERSION = "2026-10-21.1";
+const APP_VERSION = "2026-10-22.1";
 async function checkUpdate() {
   try {
     const r = await fetch("index.html?v=" + Date.now(), { cache: "no-store" });

@@ -397,7 +397,9 @@ function botButtons(b) {                 // live bots only; a dry run holds noth
     }
     h += nowBtn(A, "Close " + A + " now, even at a loss");
   }
-  if (b.hold_flat) h += '<button class="secondary" data-remote="resume" data-arg="' + esc(b.asset) + '">Resume ' +
+  if (REMOTE_V >= 3 && b.cfg_live && b.cfg_enabled && b.state === "FLAT" && b.running && ((b.remote_ok || 0) >= 3 || b.hold_flat))
+    h += '<button class="secondary" data-remote="retire" data-arg="' + A + '">Retire ' + A + '</button>';
+  if (b.hold_flat && b.cfg_enabled !== false) h += '<button class="secondary" data-remote="resume" data-arg="' + esc(b.asset) + '">Resume ' +
     esc(b.asset) + '</button>';
   if (b.state === "HALT") h += '<p class="sub">HALTED: it needs a review on the PC; remote close is not available.</p>';
   return h ? '<div class="btns">' + h + '</div>' : "";
@@ -456,11 +458,14 @@ function pendingHTML(cc, mine) {
   if (!cc || !cc.exp || cc.exp - CONFIRM_MARGIN_S < Date.now() / 1000) return "";
   const tp = cc.cmd === "close" && cc.val != null;
   const verb = tp ? "take profit at " + usd(cc.val) + " on" : (cc.cmd === "close" || cc.cmd === "close_force") ? "close NOW (even at a loss)"
-    : cc.cmd === "tp_clear" ? "cancel the take-profit on" : "resume trading on";
+    : cc.cmd === "tp_clear" ? "cancel the take-profit on"
+    : cc.cmd === "go_live" ? "make" : cc.cmd === "retire" ? "retire" : "resume trading on";
   const m = mine && mine[cc.rn];                 // mine only if nonce AND command, coin and amount all match what was sent
   const sentTP = !!m && m.val != null;           // a take-profit sent must come back as that take-profit, and v.v.
   const isMine = !!m && m.cmd === cc.cmd && m.arg === cc.arg && sentTP === tp && (!tp || Math.abs(m.val - cc.val) < 0.005);
-  const what = esc((cc.targets && cc.targets.length ? cc.targets : [cc.arg]).join(", "));
+  const what0 = esc((cc.targets && cc.targets.length ? cc.targets : [cc.arg]).join(", "));
+  const what = cc.cmd === "go_live" ? what0 + " LIVE (about " + usd0(cc.size) + " of coins plus a matching short)"
+    : cc.cmd === "retire" ? what0 + " (no longer started)" : what0;
   const until = new Date((cc.exp - CONFIRM_MARGIN_S) * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   if (!isMine) {                             // the PC got a request this phone never sent (or not as sent)
     return '<section class="card alarm"><h3>Request NOT sent from this phone: ' + verb + ' ' + what + '</h3><p>The PC received ' +
@@ -527,6 +532,16 @@ function renderDash(st, ts) {
       '</table><p class="sub" style="margin:8px 0 0">Expected ~' + usd0(al.expected_carry_usd_yr) + '/yr (' + pct(al.expected_carry_pct) + ' on ' +
       usd0(al.capital_usd) + ')' + ((al.notes || []).length ? ". " + esc(al.notes.join(". ")) : "") + '</p></section>';
   }
+  const gl = REMOTE_V >= 3 ? (st.golive || []) : [];
+  if (gl.length) {
+    const last = (st.remote || {}).golive_ts || 0, wait = last && Date.now() / 1000 - last < 86400;
+    h += '<h2>Ready to go live</h2><section class="card">' + gl.map((g) => '<div class="kvr"><span><b>' + esc(g.asset) + '</b> · ' +
+      usd0(g.spot_usd) + ' hedged · ' + pct(g.net) + '/yr on capital' + (g.dry_state ? ' · ' + esc(g.dry_state) : '') + '</span>' +
+      (wait ? '' : '<button class="danger" data-remote="go_live" data-arg="' + esc(g.asset) + '">Go live</button>') + '</div>').join("") +
+      '<p class="sub" style="margin:8px 0 0">In the allocator\'s plan but not live yet, so its capital sits in USDC. Go live stops the dry ' +
+      'run and starts a live bot, which opens by itself (sized from the plan, 100% hedged, only if the margin pool can take it). ' +
+      'One coin per 24 hours; it needs a second tap.' + (wait ? ' <b>The last go-live was under 24 hours ago.</b>' : '') + '</p></section>';
+  }
   const sc = st.screen;
   if (sc && sc.top) h += '<h2>Carry screen · ' + esc(sc.eligible) + ' of ' + esc(sc.universe) + ' pass</h2><section class="card"><table class="tbl"><tr><th>#</th><th>Coin</th><th>On capital</th><th>Funding</th></tr>' +
     sc.top.slice(0, 6).map((r) => '<tr><td>' + esc(r.rank) + '</td><td><b>' + esc(r.asset) + '</b></td><td>' + pct(r.net_on_capital) + '</td><td>' + pct(r.fund_cons_ann) + '</td></tr>').join("") + '</table></section>';
@@ -587,7 +602,7 @@ async function sendCmd(cmd, extra) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: enc.encode("mu-cmd-v1") }, key,
                                          enc.encode(JSON.stringify(body)));
-  if (["close", "close_force", "tp_clear", "resume"].includes(cmd)) {   // remembered BEFORE sending: the PC's answer is recognised
+  if (["close", "close_force", "tp_clear", "resume", "go_live", "retire"].includes(cmd)) {   // remembered BEFORE sending
     const mine = await myRequests();
     mine[body.nonce] = { cmd, arg: body.arg, val: body.val, ts: body.ts };
     await HFAMDB.kvSet("myRequests", mine);
@@ -604,6 +619,9 @@ const ASK = {
   close_force: (w) => "Close " + w + " NOW, even at a loss? The bot sells the coins and buys back the short at today's prices, " +
                       "then stays out until you press Resume. You will be asked to confirm once more.",
   tp_clear: (w) => "Cancel the take-profit on " + w + "? The position keeps running under its normal rules.",
+  go_live: (w) => "Make " + w + " LIVE? The PC stops its dry run and starts a live bot. It opens by itself once its entry check passes: " +
+                  "coins plus a matching short, sized by the allocator, 100% hedged, opening cost about 0.4%. You will be asked to confirm once more.",
+  retire: (w) => "Retire " + w + "? It is no longer started and stays flat. (Its position must already be closed.)",
   resume: (w) => "Resume trading on " + w + "? The bot may open again under its normal rules. You will be asked to confirm once more.",
 };
 const SENT = {
@@ -612,6 +630,8 @@ const SENT = {
   close: "Sent. A confirmation request arrives on this phone within about a minute.",
   close_force: "Sent. A confirmation request arrives on this phone within about a minute.",
   tp_clear: "Sent. A confirmation request arrives on this phone within about a minute.",
+  go_live: "Sent. A confirmation request arrives on this phone within about a minute.",
+  retire: "Sent. A confirmation request arrives on this phone within about a minute.",
   resume: "Sent. A confirmation request arrives on this phone within about a minute.",
 };
 async function onRemoteClick(e) {
@@ -665,7 +685,7 @@ $("#pendingBox").addEventListener("click", onRemoteClick);
 // A home-screen app can stay in memory for days, still running the code it started with: Refresh only re-reads the
 // data. So when the app comes back to the front, or Refresh is tapped, check whether a newer version is deployed and
 // reload once if it is (at most once per version every 10 minutes, so a stale CDN copy can never cause a loop).
-const APP_VERSION = "2026-10-19.2";
+const APP_VERSION = "2026-10-21.1";
 async function checkUpdate() {
   try {
     const r = await fetch("index.html?v=" + Date.now(), { cache: "no-store" });

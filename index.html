@@ -442,6 +442,32 @@ function renderGold(g, stale) {
   return h + '</section>';
 }
 
+const sbp = (v) => v == null ? "–" : (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1) + "bp";
+function renderPaper(p, stale) {         // the paper market-making test (mu_paper_mm.py): no orders, public data
+  if (!p) return "";
+  if (p.error) return '<section class="card"><b>Market-making test</b><p class="sub">' + esc(p.error) + '</p></section>';
+  const pr = p.primary, v = pr ? pr.verdict : "collecting";
+  const pills = '<span class="pill off">PAPER · NO ORDERS</span><span class="pill ' + (p.running && !stale ? "on" : "bad") + '">' +
+    (stale ? "LAST SEEN " : "") + (p.running ? "RUNNING" : "NOT RUNNING") + '</span>';
+  let h = '<section class="card bot"><div class="head"><b>Market-making test</b><span class="pills">' + pills + '</span></div>';
+  h += '<div class="big ' + (/^PASS/.test(v) ? "pos" : /^fail/.test(v) ? "neg" : "") + '">' + esc(v.replace(/ \(.*$/, "")) + '</div>' +
+    '<p class="sub" style="margin:0">' + esc(p.primary_name || "") + '. Decided after ' + p.need_clips + ' orders over ' + p.need_days + ' days.</p>';
+  const rows = [
+    ["Progress", (pr ? pr.clips : 0) + "/" + p.need_clips + " orders · " + (pr ? pr.days : 0) + "/" + p.need_days + " days"],
+    ["Profit per fill (after costs)", pr ? '<span class="' + cls(pr.net_bp) + '">' + sbp(pr.net_bp) + '</span>' : "–"],
+    ["Low end of the range", pr ? sbp(pr.lo_bp) : "–"],
+    ["P&amp;L so far (at $100 orders)", pr ? '<span class="' + cls(pr.usd_total) + '">' + usd(pr.usd_total) + '</span>' : "–"],
+    ["Per day at $100 orders", pr ? '<span class="' + cls(pr.usd_day) + '">' + usd(pr.usd_day) + '</span>' : "–"],
+    ["Collected", (p.span_d != null ? Number(p.span_d).toFixed(1) + " days · " : "") + (p.fills || 0) + " fills (all depths)"],
+    ["Markets", (p.warm_markets || 0) + "/" + (p.markets || 0) + " warm · " + (p.quoting || 0) + " imaginary orders"],
+  ];
+  const b = (p.best || [])[0];
+  if (b) rows.push(["Best other depth (exploratory)", (b.kind === "xperp" ? "perp " : "spot ") + (b.depth_bp / 100).toFixed(1) + "% " +
+    esc(b.model) + ': <span class="' + cls(b.net_bp) + '">' + sbp(b.net_bp) + '</span> (' + b.clips + " orders)"]);
+  h += rows.map((r) => '<div class="kvr"><span>' + r[0] + '</span><span>' + r[1] + '</span></div>').join("");
+  return h + '</section>';
+}
+
 const STALE_S = 1800;                    // the PC publishes every 15 min: two missed uploads = something is down
 const dur = (s) => s < 5400 ? Math.round(s / 60) + " min" : (s / 3600).toFixed(1) + " h";
 function alarmHTML(st, age) {
@@ -542,7 +568,7 @@ function renderDash(st, ts) {
   GOLIVE = {}; (REMOTE_V >= 3 ? (st.golive || []) : []).forEach((g) => { GOLIVE[g.asset] = g; });
   GOLIVE_WAIT = !!((st.remote || {}).golive_ts && Date.now() / 1000 - st.remote.golive_ts < 86400);
   let h = alarmHTML(st, age) + (st.bots || []).map((b) => renderBot(b, stale, st.closed)).join("") + goliveHTML(st) +
-    closedHTML(st.closed) + renderGold(st.gold, stale) + remoteHTML(st, stale);
+    closedHTML(st.closed) + renderGold(st.gold, stale) + renderPaper(st.paper, stale) + remoteHTML(st, stale);
   const acc = st.account || {};
   if (acc.total_eq != null) h += '<section class="card"><div class="kvr"><span>OKX account equity</span><span>' + usd0(acc.total_eq) +
     '</span></div><div class="kvr"><span>USDC</span><span>' + usd0(acc.usdc_eq) + '</span></div></section>';
@@ -698,7 +724,7 @@ $("#pendingBox").addEventListener("click", onRemoteClick);
 // A home-screen app can stay in memory for days, still running the code it started with: Refresh only re-reads the
 // data. So when the app comes back to the front, or Refresh is tapped, check whether a newer version is deployed and
 // reload once if it is (at most once per version every 10 minutes, so a stale CDN copy can never cause a loop).
-const APP_VERSION = "2026-10-22.1";
+const APP_VERSION = "2026-10-26.1";
 async function checkUpdate() {
   try {
     const r = await fetch("index.html?v=" + Date.now(), { cache: "no-store" });

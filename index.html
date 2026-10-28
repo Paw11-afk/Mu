@@ -45,6 +45,8 @@ ul.alerts{list-style:none;margin:0;padding:0}
 ul.alerts li{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:8px;overflow:hidden}
 details summary{list-style:none;display:flex;gap:10px;align-items:flex-start;padding:12px 14px;cursor:pointer}
 details summary::-webkit-details-marker{display:none}
+details.pgrid{margin-top:10px;border-top:1px solid var(--line)}details.pgrid summary{padding:10px 0 2px;font-size:14px;color:var(--muted)}details.pgrid summary::before{content:"▸ "}details.pgrid[open] summary::before{content:"▾ "}
+details.pgrid .tbl{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
 .lvl{flex:none;font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;background:var(--chip);margin-top:2px}
 .lvl.CRITICAL{color:var(--bad)}.lvl.WARNING{color:var(--warn)}.lvl.RESOLVED{color:var(--good)}.lvl.INFO,.lvl.DIGEST{color:var(--info)}
 .t{flex:1;min-width:0;font-size:15px}.t .when{display:block;font-size:12px;color:var(--muted);margin-top:2px}
@@ -465,7 +467,29 @@ function renderPaper(p, stale) {         // the paper market-making test (mu_pap
   if (b) rows.push(["Best other depth (exploratory)", (b.kind === "xperp" ? "perp " : "spot ") + (b.depth_bp / 100).toFixed(1) + "% " +
     esc(b.model) + ': <span class="' + cls(b.net_bp) + '">' + sbp(b.net_bp) + '</span> (' + b.clips + " orders)"]);
   h += rows.map((r) => '<div class="kvr"><span>' + r[0] + '</span><span>' + r[1] + '</span></div>').join("");
-  return h + '</section>';
+  return h + paperGrid(p.grid) + '</section>';
+}
+function paperGrid(g) {                  // depth x holding time, cautious fills (mu_paper_mm.grid_data): exploratory
+  const mk = g && g.models && g.models.through;
+  if (!mk) return "";
+  const names = { net: "Market-order exit (after fees)", netmx: "Limit exit at best price (after fees)", mxmaker: "Limit exit: % filled as maker" };
+  let h = '<details class="pgrid"><summary>Depth × holding time (exploratory)</summary>';
+  for (const kind of ["xperp", "spot"]) {
+    const kd = mk[kind];
+    if (!kd) continue;
+    for (const col of ["net", "netmx", "mxmaker"]) {
+      h += '<p class="sub" style="margin:12px 0 2px"><b>' + (kind === "xperp" ? "Perp" : "Spot") + '</b> · ' + names[col] + '</p>' +
+        '<table class="tbl"><tr><th style="text-align:left">Depth</th>' + g.labels.map((l) => '<th>' + esc(l) + '</th>').join("") + '</tr>';
+      kd.depths.forEach((d, i) => {
+        const few = kd.fills[i] < 30;
+        h += '<tr' + (few ? ' style="color:var(--muted)"' : "") + '><td style="text-align:left">' + (d / 100).toFixed(1) + '%<span style="color:var(--muted);font-size:11px"> ' + kd.fills[i] + '</span></td>' +
+          (kd.cells[col][i] || []).map((c) => !c ? '<td>–</td>' : col === "mxmaker" ? '<td' + (c[1] < 30 ? ' style="color:var(--muted)"' : "") + '>' + Math.round(c[0]) + '%</td>' :
+            '<td class="' + (few || c[1] < 30 ? "" : c[0] >= 0 ? "pos" : "neg") + '"' + (c[1] < 30 ? ' style="color:var(--muted)"' : "") + '>' + (c[0] >= 0 ? "+" : "−") + Math.abs(c[0]).toFixed(0) + (c[2] ? "★" : "") + '</td>').join("") + '</tr>';
+      });
+      h += '</table>';
+    }
+  }
+  return h + '<p class="sub" style="margin-top:10px">bp per fill, by how long the position is held (columns) and how deep the quote sat (rows). Small grey numbers = fills; grey = under 30 fills behind it (noise). ★ = a strict bound above zero. Many cells: read the pattern, not the best cell.</p></details>';
 }
 
 const STALE_S = 1800;                    // the PC publishes every 15 min: two missed uploads = something is down
@@ -724,7 +748,7 @@ $("#pendingBox").addEventListener("click", onRemoteClick);
 // A home-screen app can stay in memory for days, still running the code it started with: Refresh only re-reads the
 // data. So when the app comes back to the front, or Refresh is tapped, check whether a newer version is deployed and
 // reload once if it is (at most once per version every 10 minutes, so a stale CDN copy can never cause a loop).
-const APP_VERSION = "2026-10-26.1";
+const APP_VERSION = "2026-10-28.1";
 async function checkUpdate() {
   try {
     const r = await fetch("index.html?v=" + Date.now(), { cache: "no-store" });

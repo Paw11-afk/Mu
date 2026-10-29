@@ -377,6 +377,52 @@ function renderBot(b, stale, closed) {   // b.nic_now: the bot's own 'net if clo
   return h + botButtons(b) + '</section>';
 }
 
+// 2026-10-29: ONE generic card for any strategy record (status.strategies, schema mu.strategy/1): the live gold calendar
+// today, any other ring-fenced sleeve tomorrow, the coins once the full generic layer lands. NO kind-specific code:
+// everything shown -- legs, money, details, warnings, buttons and their wording -- comes from the record itself.
+const PHASE_TXT = { idle: "FLAT", held: "HELD", entering: "OPENING", on: "ON", adjusting: "ADJUSTING", exiting: "CLOSING",
+                    halted: "HALTED" };
+const tsTxt = (ts) => new Date(ts * 1000).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+function renderStrategy(r, stale) {
+  if (!r || !r.id) return "";
+  const st = PHASE_TXT[r.phase] || String(r.state || "?");
+  const ok = r.running && r.phase !== "halted";
+  const run = stale ? '<span class="pill bad">LAST SEEN ' + esc(r.running ? st : "NOT RUNNING") + '</span>'
+                    : '<span class="pill ' + (ok ? "on" : "bad") + '">' + esc(r.running ? st : "NOT RUNNING") + '</span>';
+  const pills = '<span class="pill ' + (r.dry_run ? "off" : "on") + '">' + (r.dry_run ? "DRY RUN" : "LIVE") + '</span>' + run +
+    (r.badges || []).map((b) => '<span class="pill ' + (b.tone === "bad" ? "bad" : "off") + '">' + esc(b.t) + '</span>').join("");
+  let h = '<section class="card bot"><div class="head"><b>' + esc(r.label || r.id) + '</b><span class="pills">' + pills + '</span></div>';
+  if (r.sub) h += '<p class="sub" style="margin:0 0 6px">' + esc(r.sub) + '</p>';
+  const m = r.money || {};
+  if (m.net_mark != null) h += '<div class="big ' + cls(m.net_mark) + '">' + usd(m.net_mark) + '</div><p class="sub" style="margin:0">' +
+    "net at today's prices" + (r.entered_ts ? " · open " + ago(r.entered_ts).replace(" ago", "") : "") + '</p>';
+  const rows = [];
+  (r.legs || []).forEach((l) => rows.push([esc(String(l.side || "").toUpperCase()) + " " + esc(l.inst),
+    esc(l.size) + " " + esc(l.unit || "") + (l.entry != null ? " @ " + esc(Number(l.entry).toFixed(2)) : "") +
+    (l.upl != null ? ' · <span class="' + cls(l.upl) + '">' + usd(l.upl) + '</span>' : "")]));
+  if (m.net_exit != null) rows.push(["If closed now", '<span class="' + cls(m.net_exit) + '">' + usd(m.net_exit) + '</span>']);
+  if (m.funding != null) rows.push(["Funding received", usd(m.funding) + (m.fund_n != null ? " (" + esc(m.fund_n) + " payments)" : "")]);
+  if (m.fees != null) rows.push(["Fees", '<span class="neg">' + usd(-Math.abs(m.fees)) + '</span>']);
+  if (m.per_day != null) rows.push(["Running at", '<span class="' + cls(m.per_day) + '">' + usd(m.per_day) + '</span> a day' +
+    (m.per_day_src ? ' <span class="sub">(' + esc(m.per_day_src) + ')</span>' : "")]);
+  (r.timers || []).forEach((t) => rows.push([esc(t.k), esc(tsTxt(t.ts))]));
+  (r.details || []).forEach((d) => rows.push([esc(d.k), '<span class="' + (d.tone === "bad" ? "neg" : d.tone === "ok" ? "pos" : "") + '">' +
+    esc(d.v) + '</span>']));
+  h += rows.map((x) => '<div class="kvr"><span>' + x[0] + '</span><span>' + x[1] + '</span></div>').join("");
+  (r.warnings || []).forEach((w) => { h += '<p class="' + (w.lvl === "bad" ? "neg" : "sub") + '" style="margin:6px 0 0">' + esc(w.t) + '</p>'; });
+  return h + strategyButtons(r) + '</section>';
+}
+function strategyButtons(r) {           // the record's own actions; the PC re-checks every one before it acts
+  if (REMOTE_V < 4 || r.dry_run) return "";
+  const acts = (r.actions || []).filter((a) => a.by === "bot");
+  const on = acts.filter((a) => a.enabled), why = acts.filter((a) => !a.enabled && a.why && a.id === "close_now");
+  if (!on.length && !why.length) return "";
+  return (on.length ? '<div class="btns">' + on.map((a) => '<button class="' + (a.danger ? "danger" : "secondary") +
+      '" data-remote="' + esc(a.cmd) + '" data-arg="' + esc(r.id) + '" data-ask="' + esc(a.ask || "") + '">' + esc(a.label) +
+      '</button>').join("") + '</div>' : "") +
+    why.map((a) => '<p class="sub" style="margin:4px 0 0">' + esc(a.label) + ": " + esc(a.why) + '</p>').join("");
+}
+
 let REMOTE_V = 0;                         // the PC's remote protocol (status.remote.v): take-profit needs 2
 let GOLIVE = {}, GOLIVE_WAIT = false;      // plan coins that may go live (status.golive), and the 24 h limit
 const nowBtn = (arg, label) => REMOTE_V >= 2    // CLOSE NOW: close_force on a 10-19 PC, a plain close (= close now) before
@@ -418,7 +464,7 @@ function renderGold(g, stale) {
   if (!g || g.error) return "";
   const pills = '<span class="pill off">DRY RUN</span><span class="pill ' + (g.running && !stale ? "on" : "bad") + '">' +
     (stale ? "LAST SEEN " : "") + (g.running ? esc(g.state) : "NOT RUNNING") + '</span>';
-  let h = '<section class="card bot"><div class="head"><b>Gold carry</b><span class="pills">' + pills + '</span></div>';
+  let h = '<section class="card bot"><div class="head"><b>Gold research · dry run</b><span class="pills">' + pills + '</span></div>';
   if (g.state !== "ON") return h + '<p>No virtual position' + (g.wait_note ? ": " + esc(g.wait_note) : ".") + '</p></section>';
   const n = g.notional || 0;
   const fr = g.funding_real_ann != null ? g.funding_real_ann : g.funding_rate_ann;   // RECEIVED once paid, not today's quote
@@ -556,8 +602,16 @@ async function renderPending() {
 function remoteHTML(st, stale) {
   const r = st.remote || {};
   const live = (st.bots || []).filter((b) => !b.dry_run);
-  const anyOpen = live.some((b) => b.state === "ON" && b.running);
-  const anyHeld = live.some((b) => b.hold_flat);
+  // 2026-10-29: the Kill switch (close now, ALL) closes every coin AND every live strategy record (the user's call)
+  const strat = REMOTE_V >= 4 ? (st.strategies || []).filter((r) => !r.dry_run) : [];
+  const stratOpen = strat.filter((r) => r.running && ["entering", "on", "adjusting"].includes(r.phase));
+  const coinsOpen = live.filter((b) => b.state === "ON" && b.running);
+  const anyOpen = coinsOpen.length > 0 || stratOpen.length > 0;
+  const anyHeld = live.some((b) => b.hold_flat) || strat.some((r) => r.phase === "held");
+  const killWhat = coinsOpen.map((b) => b.asset).concat(stratOpen.map((r) => r.label || r.id)).join(", ");
+  const killBtn = '<button class="danger" data-remote="close_force" data-arg="ALL" data-ask="' +
+    esc("KILL SWITCH: close every live position NOW at today's prices, even at a loss: " + killWhat +
+        ". Each then stays out until you press Resume.") + '">Kill switch: close everything now</button>';
   const anyTP = REMOTE_V >= 2 && live.some((b) => b.state === "ON" && b.running && (b.remote_ok || 0) >= 2);
   const link = r.err ? '<span class="neg">' + esc(r.err) + '</span>' : (r.ok_ts ? "checked " + ago(r.ok_ts) : "not checked yet");
   return '<h2>Remote control</h2><section class="card">' +
@@ -565,7 +619,7 @@ function remoteHTML(st, stale) {
     '<div class="btns"><button data-remote="start_bots">Restart system</button>' +
     '<button class="secondary" data-remote="ping">Test connection</button></div>' +
     (anyOpen ? '<div class="btns">' + (anyTP ? '<button class="danger" data-remote="close" data-arg="ALL">Take profit on all (at ≥ $0)</button>' : "") +
-               nowBtn("ALL", "Close all now, even at a loss") + '</div>' : "") +
+               (REMOTE_V >= 4 ? killBtn : nowBtn("ALL", "Close all now, even at a loss")) + '</div>' : "") +
     (anyHeld ? '<div class="btns"><button class="secondary" data-remote="resume" data-arg="ALL">Resume all</button></div>' : "") +
     '<p class="sub" style="margin:10px 0 0">Restart system does what double-clicking hfam_startup.bat does: it starts whatever ' +
     'is not running. Take profit closes a position only once what closing would leave, after every cost and a small slippage ' +
@@ -596,7 +650,8 @@ function renderDash(st, ts) {
   REMOTE_V = (st.remote || {}).v || 0;
   GOLIVE = {}; (REMOTE_V >= 3 ? (st.golive || []) : []).forEach((g) => { GOLIVE[g.asset] = g; });
   GOLIVE_WAIT = !!((st.remote || {}).golive_ts && Date.now() / 1000 - st.remote.golive_ts < 86400);
-  let h = alarmHTML(st, age) + (st.bots || []).map((b) => renderBot(b, stale, st.closed)).join("") + goliveHTML(st) +
+  let h = alarmHTML(st, age) + (st.bots || []).map((b) => renderBot(b, stale, st.closed)).join("") +
+    (st.strategies || []).map((r) => renderStrategy(r, stale)).join("") + goliveHTML(st) +
     closedHTML(st.closed) + renderGold(st.gold, stale) + renderPaper(st.paper, stale) + remoteHTML(st, stale);
   const acc = st.account || {};
   if (acc.total_eq != null) h += '<section class="card"><div class="kvr"><span>OKX account equity</span><span>' + usd0(acc.total_eq) +
@@ -726,6 +781,12 @@ async function onRemoteClick(e) {
     const cmd = b.dataset.remote, arg = b.dataset.arg;
     const what = arg === "ALL" ? "ALL live positions" : arg;
     let val = null;
+    if (b.dataset.ask) {                              // 10-29: the record's (or the Kill switch's) own wording
+      if (!confirm(b.dataset.ask + " You will be asked to confirm once more.")) return;
+      await sendCmd(cmd, { arg });
+      toast(SENT[cmd] || "Sent. A confirmation request arrives on this phone within about a minute.");
+      return;
+    }
     if (cmd === "close" && b.dataset.now) {           // close NOW on a pre-10-19 PC (plain close, no amount)
       if (!confirm(ASK.close_force(what))) return;
       await sendCmd("close", { arg });
@@ -753,7 +814,7 @@ $("#pendingBox").addEventListener("click", onRemoteClick);
 // A home-screen app can stay in memory for days, still running the code it started with: Refresh only re-reads the
 // data. So when the app comes back to the front, or Refresh is tapped, check whether a newer version is deployed and
 // reload once if it is (at most once per version every 10 minutes, so a stale CDN copy can never cause a loop).
-const APP_VERSION = "2026-10-28.2";
+const APP_VERSION = "2026-10-29.1";
 async function checkUpdate() {
   try {
     const r = await fetch("index.html?v=" + Date.now(), { cache: "no-store" });

@@ -513,7 +513,21 @@ function renderPaper(p, stale) {         // the paper market-making test (mu_pap
   if (b) rows.push(["Best other depth (exploratory)", (b.kind === "xperp" ? "perp " : "spot ") + (b.depth_bp / 100).toFixed(1) + "% " +
     esc(b.model) + ': <span class="' + cls(b.net_bp) + '">' + sbp(b.net_bp) + '</span> (' + b.clips + " orders)"]);
   h += rows.map((r) => '<div class="kvr"><span>' + r[0] + '</span><span>' + r[1] + '</span></div>').join("");
-  return h + paperGrid(p.grid) + '</section>';
+  return h + rule1mCard(p) + paperGrid(p.grid) + '</section>';
+}
+function rule1mCard(p) {                 // the second pre-registered test (10-30): the 1-minute check exit
+  if (!p.rule1m) return "";
+  let h = '<p class="sub" style="margin:14px 0 2px"><b>Second test: the 1-minute check</b> · fixed 10-30, counts fills from ' +
+    new Date(p.rule1m_start * 1000).toISOString().slice(0, 16).replace("T", " ") + ' UTC on</p>' +
+    '<p class="sub" style="margin:0 0 4px">Quotes 0.6–3% deep. One minute after a fill: still against us → close now; bounced → hold 1 hour. Limit exits.</p>';
+  for (const c of p.rule1m) {
+    const v = c.verdict || "collecting";
+    h += '<div class="kvr"><span><b>' + (c.kind === "xperp" ? "Perp" : "Spot") + '</b> · ' + c.clips + '/' + p.need_clips + ' orders · ' + c.days + '/' + p.need_days + ' days</span><span class="' +
+      (/^PASS/.test(v) ? "pos" : /^fail/.test(v) ? "neg" : "") + '">' + esc(v.replace(/ \(\d+\/.*$/, "")) + '</span></div>';
+    if (c.fills) h += '<div class="kvr"><span style="color:var(--muted)">per fill · P&amp;L · cut at 1 min · top coin</span><span><span class="' + cls(c.net_bp) + '">' + sbp(c.net_bp) + '</span> · <span class="' + cls(c.usd_total) + '">' + usd(c.usd_total) + '</span> · ' +
+      Math.round((c.cut_share || 0) * 100) + '% · ' + esc(c.top_coin || "–") + (c.top_share != null ? " " + Math.round(c.top_share * 100) + "%" : "") + '</span></div>';
+  }
+  return h;
 }
 function paperGrid(g) {                  // depth x holding time, cautious fills (mu_paper_mm.grid_data): exploratory
   const mk = g && g.models && g.models.through;
@@ -525,11 +539,13 @@ function paperGrid(g) {                  // depth x holding time, cautious fills
     if (!kd) continue;
     for (const col of ["net", "netmx", "mxmaker"]) {
       h += '<p class="sub" style="margin:12px 0 2px"><b>' + (kind === "xperp" ? "Perp" : "Spot") + '</b> · ' + names[col] + '</p>' +
-        '<table class="tbl"><tr><th style="text-align:left">Depth</th>' + g.labels.map((l) => '<th>' + esc(l) + '</th>').join("") + '</tr>';
+        '<table class="tbl"><tr><th style="text-align:left">Depth</th>' + g.labels.map((l) => '<th>' + esc(l) + '</th>').join("") + (col === "netmx" && kd.rule1m ? '<th>1m✓</th>' : "") + '</tr>';
       kd.depths.forEach((d, i) => {
         const few = kd.fills[i] < 30;
+        const cells = (kd.cells[col][i] || []).slice();
+        if (col === "netmx" && kd.rule1m) cells.push(kd.rule1m[i]);       // + the 1-minute check rule (own count)
         h += '<tr' + (few ? ' style="color:var(--muted)"' : "") + '><td style="text-align:left">' + (d / 100).toFixed(1) + '%<span style="color:var(--muted);font-size:11px"> ' + kd.fills[i] + '</span></td>' +
-          (kd.cells[col][i] || []).map((c) => {
+          cells.map((c) => {
             if (!c) return '<td>–</td>';
             const n = col === "net" ? "" : '<span class="pgn">' + c[1] + '</span>';   // limit exits: each cell has its own count
             const grey = c[1] < 30 ? ' style="color:var(--muted)"' : "";
@@ -540,7 +556,7 @@ function paperGrid(g) {                  // depth x holding time, cautious fills
       h += '</table>';
     }
   }
-  return h + '<p class="sub" style="margin-top:10px">bp per fill, by how long the position is held (columns) and how deep the quote sat (rows). Small grey numbers = simulated fills: next to the depth for the market-order exit (every fill at that depth); under each value for the limit exit (only fills whose limit exit has finished). Grey = under 30 fills behind it (noise). ★ = a strict bound above zero. Many cells: read the pattern, not the best cell.</p></details>';
+  return h + '<p class="sub" style="margin-top:10px">bp per fill, by how long the position is held (columns) and how deep the quote sat (rows). Small grey numbers = simulated fills: next to the depth for the market-order exit (every fill at that depth); under each value for the limit exit (only fills whose limit exit has finished). Grey = under 30 fills behind it (noise). 1m✓ = the 1-minute check rule (cut at 1 min if still against us, else hold 1 h) on all data so far. ★ = a strict bound above zero. Many cells: read the pattern, not the best cell.</p></details>';
 }
 
 const STALE_S = 1800;                    // the PC publishes every 15 min: two missed uploads = something is down
@@ -814,7 +830,7 @@ $("#pendingBox").addEventListener("click", onRemoteClick);
 // A home-screen app can stay in memory for days, still running the code it started with: Refresh only re-reads the
 // data. So when the app comes back to the front, or Refresh is tapped, check whether a newer version is deployed and
 // reload once if it is (at most once per version every 10 minutes, so a stale CDN copy can never cause a loop).
-const APP_VERSION = "2026-10-29.1";
+const APP_VERSION = "2026-10-30.1";
 async function checkUpdate() {
   try {
     const r = await fetch("index.html?v=" + Date.now(), { cache: "no-store" });
